@@ -43,7 +43,7 @@ import {
 const FAO_NAVY = "#1A2E44";
 const FAO_BLUE = "#009FDA";
 
-const PROJECT_END = new Date("2026-12-19T00:00:00");
+const PROJECT_END = new Date("2026-10-19T00:00:00");
 const DISTRIBUTION_DAYS = 45; // goods must be distributed within this window before project end
 const DISTRIBUTION_START = new Date(PROJECT_END);
 DISTRIBUTION_START.setDate(DISTRIBUTION_START.getDate() - DISTRIBUTION_DAYS);
@@ -709,10 +709,12 @@ function GanttChart({ procurements, onUpdate }) {
   const { minDate, maxDate } = useMemo(() => {
     const dates = timelines.flatMap((t) => [t.timelineStart, t.timelineEnd]).filter(Boolean);
     dates.push(TODAY);
+    // Always include the project end + 14 days so the deadline and distribution window are visible
+    dates.push(PROJECT_END);
     const min = new Date(Math.min(...dates.map((d) => d.getTime())));
     const max = new Date(Math.max(...dates.map((d) => d.getTime())));
     min.setDate(min.getDate() - 14);
-    max.setDate(max.getDate() + 30);
+    max.setDate(max.getDate() + 14);
     return { minDate: min, maxDate: max };
   }, [timelines]);
 
@@ -788,7 +790,7 @@ function GanttChart({ procurements, onUpdate }) {
               Timeline — each segment is a workflow stage · drag a bar to shift all dates
             </h3>
             <div className="text-[10px] mt-0.5" style={{ color: "#64748B", fontFamily: fontStack.body }}>
-              Project ends <span className="font-semibold" style={{ color: "#DC2626" }}>19 Dec 2026</span> · distribution window starts <span className="font-semibold" style={{ color: "#D97706" }}>{fmtDate(DISTRIBUTION_START)}</span> · goods must be delivered before that date
+              Project ends <span className="font-semibold" style={{ color: "#DC2626" }}>19 Oct 2026</span> · distribution window starts <span className="font-semibold" style={{ color: "#D97706" }}>{fmtDate(DISTRIBUTION_START)}</span> · goods must be delivered before that date
             </div>
           </div>
         </div>
