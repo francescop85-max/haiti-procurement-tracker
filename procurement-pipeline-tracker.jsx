@@ -43,6 +43,11 @@ import {
 const FAO_NAVY = "#1A2E44";
 const FAO_BLUE = "#009FDA";
 
+const PROJECT_END = new Date("2026-12-19T00:00:00");
+const DISTRIBUTION_DAYS = 45; // goods must be distributed within this window before project end
+const DISTRIBUTION_START = new Date(PROJECT_END);
+DISTRIBUTION_START.setDate(DISTRIBUTION_START.getDate() - DISTRIBUTION_DAYS);
+
 const fontStack = {
   display: "'IBM Plex Serif', Georgia, serif",
   body: "'IBM Plex Sans', system-ui, sans-serif",
@@ -770,15 +775,22 @@ function GanttChart({ procurements, onUpdate }) {
   }, [drag, procurements, onUpdate]);
 
   const todayX = dateToX(TODAY);
+  const distStartX = dateToX(DISTRIBUTION_START);
+  const projectEndX = dateToX(PROJECT_END);
 
   return (
     <div className="rounded-xl border bg-white overflow-hidden" style={{ borderColor: "#E2E8F0" }}>
       <div className="p-4 border-b flex items-center justify-between flex-wrap gap-3" style={{ borderColor: "#E2E8F0" }}>
         <div className="flex items-center gap-3">
           <GanttChartSquare size={18} style={{ color: FAO_NAVY }} />
-          <h3 className="text-sm font-bold" style={{ color: FAO_NAVY, fontFamily: fontStack.display }}>
-            Timeline — each segment is a workflow stage · drag a bar to shift all dates
-          </h3>
+          <div>
+            <h3 className="text-sm font-bold" style={{ color: FAO_NAVY, fontFamily: fontStack.display }}>
+              Timeline — each segment is a workflow stage · drag a bar to shift all dates
+            </h3>
+            <div className="text-[10px] mt-0.5" style={{ color: "#64748B", fontFamily: fontStack.body }}>
+              Project ends <span className="font-semibold" style={{ color: "#DC2626" }}>19 Dec 2026</span> · distribution window starts <span className="font-semibold" style={{ color: "#D97706" }}>{fmtDate(DISTRIBUTION_START)}</span> · goods must be delivered before that date
+            </div>
+          </div>
         </div>
         <div className="flex items-center gap-3 text-[10px] flex-wrap" style={{ fontFamily: fontStack.body }}>
           <LegendDot color="#15803D" label="Complete" />
@@ -787,6 +799,8 @@ function GanttChart({ procurements, onUpdate }) {
           <LegendDot color="#D97706" label="Blocked" />
           <span style={{ color: "#64748B" }}>|</span>
           <span style={{ color: "#DC2626" }}>▮ today</span>
+          <span style={{ color: "#F97316" }}>▨ distribution</span>
+          <span style={{ color: "#DC2626" }}>| project end</span>
         </div>
       </div>
 
@@ -802,6 +816,15 @@ function GanttChart({ procurements, onUpdate }) {
                   {m.label}
                 </div>
               ))}
+              {/* Distribution window label in header */}
+              {distStartX < chartWidth && (
+                <div className="absolute top-0 h-full pointer-events-none" style={{ left: distStartX, width: Math.max(0, projectEndX - distStartX), backgroundColor: "#FEF3C7", opacity: 0.6 }} />
+              )}
+              {projectEndX > 0 && projectEndX < chartWidth && (
+                <div className="absolute top-0 h-full flex items-center pointer-events-none" style={{ left: projectEndX - 1, width: 2, backgroundColor: "#DC2626" }}>
+                  <span className="absolute text-[9px] font-bold whitespace-nowrap px-1" style={{ left: 4, color: "#DC2626", fontFamily: fontStack.mono, backgroundColor: "#F8FAFC" }}>END</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -835,6 +858,16 @@ function GanttChart({ procurements, onUpdate }) {
                     <div key={i} className="absolute top-0 h-full pointer-events-none" style={{ left: m.x, width: 1, backgroundColor: "#F1F5F9" }} />
                   ))}
 
+                  {/* Distribution window */}
+                  {distStartX < chartWidth && (
+                    <div className="absolute top-0 h-full pointer-events-none"
+                      style={{ left: distStartX, width: Math.max(0, projectEndX - distStartX), backgroundColor: "#FEF3C7", opacity: 0.55,
+                        backgroundImage: "repeating-linear-gradient(45deg,transparent,transparent 5px,rgba(251,191,36,0.15) 5px,rgba(251,191,36,0.15) 10px)" }} />
+                  )}
+                  {/* Project end deadline */}
+                  {projectEndX > 0 && projectEndX < chartWidth && (
+                    <div className="absolute top-0 h-full pointer-events-none" style={{ left: projectEndX, width: 2, backgroundColor: "#DC2626", opacity: 0.85 }} />
+                  )}
                   {/* Today line */}
                   <div className="absolute top-0 h-full pointer-events-none" style={{ left: todayX, width: 1.5, backgroundColor: "#DC2626", opacity: 0.5 }} />
 
@@ -2000,9 +2033,9 @@ export default function App() {
       <header className="px-8 py-6" style={{ background: `linear-gradient(135deg, ${FAO_NAVY} 0%, #243B57 100%)`, color: "white" }}>
         <div className="flex items-center justify-between flex-wrap gap-4">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.3em] mb-1" style={{ color: FAO_BLUE, fontFamily: fontStack.body }}>FAO Haiti · Country Office</div>
+            <div className="text-[10px] uppercase tracking-[0.3em] mb-1" style={{ color: FAO_BLUE, fontFamily: fontStack.body }}>FAO Haiti · Country Office · OSRO/HAI/061/CHA</div>
             <h1 className="text-2xl font-bold leading-tight" style={{ fontFamily: fontStack.display, letterSpacing: "-0.01em" }}>Procurement Pipeline Tracker</h1>
-            <div className="text-sm mt-1" style={{ color: "#CBD5E1", fontFamily: fontStack.body }}>Standardized stages · plan-vs-actual timeline · risk monitoring</div>
+            <div className="text-sm mt-1" style={{ color: "#CBD5E1", fontFamily: fontStack.body }}>Standardized stages · plan-vs-actual timeline · risk monitoring · PM: Costantino, Claudio (FLHAI)</div>
           </div>
           <div className="text-xs" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>{fmtDate(TODAY)}</div>
         </div>
