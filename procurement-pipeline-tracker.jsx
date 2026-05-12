@@ -1418,8 +1418,6 @@ export default function App() {
   const [sortDir, setSortDir] = useState("desc");
   const [showAdd, setShowAdd] = useState(false);
 
-  if (!authed) return <LoginGate onAuth={() => setAuthed(true)} />;
-
   const handleAdd = useCallback((newProc) => {
     setProcurements((prev) => [newProc, ...prev]);
   }, []);
@@ -1490,6 +1488,8 @@ export default function App() {
   );
 
   const avgVariance = enriched.length ? (enriched.reduce((s, p) => s + p.computed.variance, 0) / enriched.length) * 100 : 0;
+
+  if (!authed) return <LoginGate onAuth={() => setAuthed(true)} />;
 
   return (
     <div style={{ backgroundColor: "#F1F5F9", minHeight: "100vh" }}>
