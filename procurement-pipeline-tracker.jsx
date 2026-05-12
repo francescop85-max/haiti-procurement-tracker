@@ -21,7 +21,9 @@ import {
   ArrowUp,
   Plus,
   X,
+  Download,
 } from "lucide-react";
+import * as XLSX from "xlsx";
 import {
   BarChart,
   Bar,
@@ -1642,9 +1644,10 @@ export default function App() {
     const formal = enriched.filter((p) => p.state !== "pre_pipeline" && p.state !== "not_applicable");
     const activeOnly = formal.filter((p) => p.state !== "cancelled");
     return {
-      portfolioTotal: formal.reduce((s, p) => s + p.estPO, 0),
-      activeTotal: activeOnly.reduce((s, p) => s + p.estPO, 0),
-      cancelledTotal: formal.filter((p) => p.state === "cancelled").reduce((s, p) => s + p.estPO, 0),
+      portfolioTotal: formal.reduce((s, p) => s + p.estInitial, 0),
+      activeTotal: activeOnly.reduce((s, p) => s + p.estInitial, 0),
+      cancelledTotal: formal.filter((p) => p.state === "cancelled").reduce((s, p) => s + p.estInitial, 0),
+      poIssued: formal.reduce((s, p) => s + (p.estPO || 0), 0),
       countAll: formal.length,
       countActive: activeOnly.length,
       countCancelled: formal.length - activeOnly.length,
@@ -1662,6 +1665,96 @@ export default function App() {
   const setSort = (key) => {
     if (sortBy === key) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
     else { setSortBy(key); setSortDir("desc"); }
+  };
+
+  const exportToExcel = () => {
+    const rows = enriched
+      .filter((p) => p.state !== "pre_pipeline" && p.state !== "not_applicable")
+      .map((p) => {
+        const currentStage = p.stages.find((s) => s.key === p.currentKey);
+        const { timelineStart, timelineEnd } = computeTimeline(p);
+        return {
+          "PR / Lot": p.lot ? `${p.pr} – ${p.lot}` : p.pr,
+          "InTend Ref.": p.intend,
+          "Tender": p.tender,
+          "Category": p.category,
+          "Method": p.method,
+          "Est. PR ($)": p.estInitial,
+          "Est. PO ($)": p.estPO || 0,
+          "Variance %": p.estPO && p.estInitial ? `${(((p.estPO - p.estInitial) / p.estInitial) * 100).toFixed(1)}%` : "—",
+          "State": p.state,
+          "Current Stage": currentStage?.name || "—",
+          "Bids Received": p.nBids ?? "",
+          "Responsive": p.nResponsive ?? "",
+          "Opening Date": fmtDate(parseDate(p.opening)),
+          "Closing Date": fmtDate(parseDate(p.closing)),
+          "Timeline Start": fmtDate(timelineStart),
+          "Timeline End": fmtDate(timelineEnd),
+          "Target PO": fmtDate(parseDate(p.targetPO)),
+          "Est. PO Date": fmtDate(p.computed.estPODate),
+          "Buffer (days)": p.computed.buffer ?? "",
+          "Risk": p.computed.risk.label,
+          "Status Narrative": p.narrative,
+        };
+      });
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+
+    // Column widths
+    const colWidths = [14, 30, 50, 20, 8, 14, 14, 10, 14, 30, 12, 12, 14, 14, 14, 14, 14, 14, 12, 20, 60];
+    ws["!cols"] = colWidths.map((w) => ({ wch: w }));
+
+    // Header row style
+    const range = XLSX.utils.decode_range(ws["!ref"]);
+    for (let C = range.s.c; C <= range.e.c; C++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: 0, c: C })];
+      if (cell) {
+        cell.s = {
+          font: { bold: true, color: { rgb: "FFFFFF" } },
+          fill: { fgColor: { rgb: "1A2E44" } },
+          alignment: { horizontal: "center", vertical: "center", wrapText: true },
+          border: { bottom: { style: "thin", color: { rgb: "009FDA" } } },
+        };
+      }
+    }
+
+    // Alternate row fill + number format for money columns
+    const moneyFmt = '#,##0';
+    const moneyCols = [5, 6]; // Est. PR, Est. PO
+    for (let R = 1; R <= range.e.r; R++) {
+      const fill = R % 2 === 0 ? { fgColor: { rgb: "F1F5F9" } } : { fgColor: { rgb: "FFFFFF" } };
+      for (let C = range.s.c; C <= range.e.c; C++) {
+        const addr = XLSX.utils.encode_cell({ r: R, c: C });
+        if (!ws[addr]) ws[addr] = { t: "z" };
+        ws[addr].s = { fill, alignment: { vertical: "center", wrapText: C === 20 } };
+        if (moneyCols.includes(C) && typeof ws[addr].v === "number") ws[addr].z = moneyFmt;
+      }
+    }
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Procurement Pipeline");
+
+    // Summary sheet
+    const summaryRows = [
+      ["FAO Haiti – OCHA Procurement Tracking"],
+      [`Exported: ${fmtDate(TODAY)}`],
+      [],
+      ["SUMMARY", ""],
+      ["Portfolio Total (PR)", totals.portfolioTotal],
+      ["Active Value (PR)", totals.activeTotal],
+      ["Total PO Issued", totals.poIssued],
+      ["On Track", totals.ok],
+      ["Watch", totals.watch],
+      ["Critical", totals.critical],
+    ];
+    const ws2 = XLSX.utils.aoa_to_sheet(summaryRows);
+    ws2["!cols"] = [{ wch: 28 }, { wch: 18 }];
+    ws2["A1"].s = { font: { bold: true, sz: 14, color: { rgb: "1A2E44" } } };
+    ws2["A4"].s = { font: { bold: true } };
+    ["B5", "B6", "B7"].forEach((addr) => { if (ws2[addr]) ws2[addr].z = '"$"#,##0'; });
+    XLSX.utils.book_append_sheet(wb, ws2, "Summary");
+
+    XLSX.writeFile(wb, `FAO-Haiti-Procurement-${toISODate(TODAY)}.xlsx`);
   };
 
   const TabButton = ({ id, label, Icon }) => (
@@ -1692,13 +1785,14 @@ export default function App() {
       </header>
 
       <div className="px-8 py-6">
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-          <KPI label="Portfolio total" value={fmtUSDShort(totals.portfolioTotal)} sub={`${totals.countAll} solicitations (incl. cancelled) · ${totals.countPipeline} pipeline`} accent={FAO_NAVY} />
-          <KPI label="Active value" value={fmtUSDShort(totals.activeTotal)} sub={`Excludes ${totals.countCancelled} cancelled (${fmtUSDShort(totals.cancelledTotal)})`} accent={FAO_BLUE} />
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4">
+          <KPI label="Portfolio total (PR)" value={fmtUSDShort(totals.portfolioTotal)} sub={`${totals.countAll} solicitations (incl. cancelled) · ${totals.countPipeline} pipeline`} accent={FAO_NAVY} />
+          <KPI label="Active value (PR)" value={fmtUSDShort(totals.activeTotal)} sub={`Excludes ${totals.countCancelled} cancelled (${fmtUSDShort(totals.cancelledTotal)})`} accent={FAO_BLUE} />
+          <KPI label="PO issued" value={fmtUSDShort(totals.poIssued)} sub="Sum of est. PO values" accent="#0F766E" />
           <KPI label="On track" value={totals.ok} sub="🟢 within plan" accent="#16A34A" />
           <KPI label="Watch" value={totals.watch} sub="🟠 tight buffer / hold" accent="#D97706" />
           <KPI label="Critical" value={totals.critical} sub="🔴 overrun / cancelled" accent="#DC2626" />
-          <KPI label="Avg. PR→PO variance" value={`${avgVariance.toFixed(1)}%`} sub="PO vs. PR estimate" accent="#0F766E" />
+          <KPI label="Avg. PR→PO variance" value={`${avgVariance.toFixed(1)}%`} sub="PO vs. PR estimate" accent="#9333EA" />
         </div>
       </div>
 
@@ -1713,6 +1807,13 @@ export default function App() {
           style={{ backgroundColor: FAO_BLUE, fontFamily: fontStack.body, border: `1px solid ${FAO_BLUE}` }}
         >
           <Plus size={14} /> Add procurement
+        </button>
+        <button
+          onClick={exportToExcel}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition"
+          style={{ backgroundColor: "white", color: FAO_NAVY, fontFamily: fontStack.body, border: `1px solid #CBD5E1` }}
+        >
+          <Download size={14} /> Export Excel
         </button>
         {tab === "pipeline" && (
           <div className="ml-auto flex items-center gap-2 flex-wrap">
