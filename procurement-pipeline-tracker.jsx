@@ -363,6 +363,23 @@ function StageEditor({ procurement, onUpdate }) {
     const merged = fresh.map((f, i) => ({ ...f, status: procurement.stages[i]?.status || "not_started" }));
     onUpdate({ ...procurement, stages: merged });
   };
+  const [addingAfter, setAddingAfter] = useState(null); // index after which to insert, or "end"
+  const [newStepName, setNewStepName] = useState("");
+
+  const insertCustomStep = (afterIdx) => {
+    if (!newStepName.trim()) return;
+    const newStage = { key: `custom_${Date.now()}`, name: newStepName.trim(), plannedDays: 1, status: "not_started", custom: true };
+    const stages = [...procurement.stages];
+    stages.splice(afterIdx + 1, 0, newStage);
+    onUpdate({ ...procurement, stages });
+    setAddingAfter(null);
+    setNewStepName("");
+  };
+
+  const deleteCustomStep = (i) => {
+    onUpdate({ ...procurement, stages: procurement.stages.filter((_, idx) => idx !== i) });
+  };
+
   const computed = computeProcurement(procurement);
   const { stages: timedStages } = computeTimeline(procurement);
 
@@ -409,52 +426,101 @@ function StageEditor({ procurement, onUpdate }) {
                 <th className="text-right px-3 py-2 font-semibold">Start</th>
                 <th className="text-right px-3 py-2 font-semibold">End</th>
                 <th className="text-right px-3 py-2 font-semibold">Days</th>
+                <th className="w-6" />
               </tr>
             </thead>
             <tbody>
               {procurement.stages.map((s, i) => {
                 const ts = timedStages[i];
+                const isAdding = addingAfter === i;
                 return (
-                  <tr key={s.key} className="border-t" style={{ borderColor: "#F1F5F9", backgroundColor: s.status === "in_progress" ? "#EFF6FF" : "white" }}>
-                    <td className="px-3 py-2 text-xs" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>{String(i + 1).padStart(2, "0")}</td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center gap-2">
-                        <StatusDot status={s.status} />
-                        <span style={{ color: "#0F172A" }}>{s.name}</span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <select value={s.status} onChange={(e) => setStageStatus(i, e.target.value)}
-                        className="text-xs px-2 py-1 rounded border bg-white"
-                        style={{ borderColor: "#CBD5E1", color: "#334155", fontFamily: fontStack.body }}>
-                        <option value="not_started">Not started</option>
-                        <option value="in_progress">In progress</option>
-                        <option value="complete">Complete</option>
-                        <option value="blocked">Blocked</option>
-                        <option value="skipped">Skipped</option>
-                      </select>
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <input type="date" value={ts?.stageStart ? toISODate(ts.stageStart) : ""}
-                        onChange={(e) => updateStageStart(i, e.target.value)}
-                        className="px-1.5 py-1 rounded border text-[11px] w-32"
-                        style={{ borderColor: s.stageStartOverride ? FAO_BLUE : "#CBD5E1", fontFamily: fontStack.mono, color: "#0F172A", outline: "none" }} />
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <input type="date" value={ts?.stageEnd ? toISODate(ts.stageEnd) : ""}
-                        onChange={(e) => updateStageEnd(i, e.target.value)}
-                        className="px-1.5 py-1 rounded border text-[11px] w-32"
-                        style={{ borderColor: "#CBD5E1", fontFamily: fontStack.mono, color: "#0F172A", outline: "none" }} />
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <input type="number" min="0" value={s.plannedDays}
-                        onChange={(e) => updateStage(i, { plannedDays: Number(e.target.value) })}
-                        disabled={s.status === "complete" || s.status === "skipped"}
-                        className="w-14 text-right px-2 py-1 rounded border text-xs disabled:bg-slate-100 disabled:text-slate-400"
-                        style={{ borderColor: "#CBD5E1", fontFamily: fontStack.mono, color: "#0F172A" }} />
-                      <span className="ml-1 text-xs" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>d</span>
-                    </td>
-                  </tr>
+                  <React.Fragment key={s.key}>
+                    <tr className="border-t group" style={{ borderColor: "#F1F5F9", backgroundColor: s.status === "in_progress" ? "#EFF6FF" : "white" }}>
+                      <td className="px-3 py-2 text-xs" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>{String(i + 1).padStart(2, "0")}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <StatusDot status={s.status} />
+                          {s.custom ? (
+                            <input value={s.name} onChange={(e) => updateStage(i, { name: e.target.value })}
+                              className="flex-1 text-sm px-1.5 py-0.5 rounded border"
+                              style={{ borderColor: "#CBD5E1", fontFamily: fontStack.body, color: "#0F172A", minWidth: 0 }} />
+                          ) : (
+                            <span style={{ color: "#0F172A" }}>{s.name}</span>
+                          )}
+                          {s.custom && <span className="text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider" style={{ backgroundColor: "#EDE9FE", color: "#5B21B6", fontFamily: fontStack.mono }}>custom</span>}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <select value={s.status} onChange={(e) => setStageStatus(i, e.target.value)}
+                          className="text-xs px-2 py-1 rounded border bg-white"
+                          style={{ borderColor: "#CBD5E1", color: "#334155", fontFamily: fontStack.body }}>
+                          <option value="not_started">Not started</option>
+                          <option value="in_progress">In progress</option>
+                          <option value="complete">Complete</option>
+                          <option value="blocked">Blocked</option>
+                          <option value="skipped">Skipped</option>
+                        </select>
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input type="date" value={ts?.stageStart ? toISODate(ts.stageStart) : ""}
+                          onChange={(e) => updateStageStart(i, e.target.value)}
+                          className="px-1.5 py-1 rounded border text-[11px] w-32"
+                          style={{ borderColor: s.stageStartOverride ? FAO_BLUE : "#CBD5E1", fontFamily: fontStack.mono, color: "#0F172A", outline: "none" }} />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input type="date" value={ts?.stageEnd ? toISODate(ts.stageEnd) : ""}
+                          onChange={(e) => updateStageEnd(i, e.target.value)}
+                          className="px-1.5 py-1 rounded border text-[11px] w-32"
+                          style={{ borderColor: "#CBD5E1", fontFamily: fontStack.mono, color: "#0F172A", outline: "none" }} />
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <input type="number" min="0" value={s.plannedDays}
+                          onChange={(e) => updateStage(i, { plannedDays: Number(e.target.value) })}
+                          disabled={s.status === "complete" || s.status === "skipped"}
+                          className="w-14 text-right px-2 py-1 rounded border text-xs disabled:bg-slate-100 disabled:text-slate-400"
+                          style={{ borderColor: "#CBD5E1", fontFamily: fontStack.mono, color: "#0F172A" }} />
+                        <span className="ml-1 text-xs" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>d</span>
+                      </td>
+                      <td className="px-1 py-2">
+                        <div className="flex items-center gap-0.5">
+                          <button onClick={() => { setAddingAfter(isAdding ? null : i); setNewStepName(""); }}
+                            title="Insert step after this one"
+                            className="opacity-0 group-hover:opacity-100 transition p-1 rounded hover:bg-slate-100"
+                            style={{ color: FAO_BLUE }}>
+                            <Plus size={13} />
+                          </button>
+                          {s.custom && (
+                            <button onClick={() => deleteCustomStep(i)} title="Remove step"
+                              className="opacity-0 group-hover:opacity-100 transition p-1 rounded hover:bg-red-50"
+                              style={{ color: "#DC2626" }}>
+                              <X size={13} />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                    {isAdding && (
+                      <tr style={{ backgroundColor: "#F0F9FF" }}>
+                        <td />
+                        <td colSpan={5} className="px-3 py-2">
+                          <div className="flex items-center gap-2">
+                            <input autoFocus value={newStepName} onChange={(e) => setNewStepName(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === "Enter") insertCustomStep(i); if (e.key === "Escape") { setAddingAfter(null); setNewStepName(""); } }}
+                              placeholder="Step name…"
+                              className="flex-1 text-sm px-2 py-1 rounded border"
+                              style={{ borderColor: FAO_BLUE, fontFamily: fontStack.body, color: "#0F172A", outline: "none" }} />
+                            <button onClick={() => insertCustomStep(i)} disabled={!newStepName.trim()}
+                              className="text-xs px-3 py-1 rounded font-medium text-white disabled:opacity-40"
+                              style={{ backgroundColor: FAO_BLUE, fontFamily: fontStack.body }}>Add</button>
+                            <button onClick={() => { setAddingAfter(null); setNewStepName(""); }}
+                              className="text-xs px-2 py-1 rounded hover:bg-slate-200"
+                              style={{ color: "#475569", fontFamily: fontStack.body }}>Cancel</button>
+                          </div>
+                        </td>
+                        <td />
+                      </tr>
+                    )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
