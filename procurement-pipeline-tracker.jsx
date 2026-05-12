@@ -25,6 +25,8 @@ import {
   GripVertical,
   CalendarDays,
   ChevronUp,
+  FileText,
+  Loader2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
@@ -1977,6 +1979,8 @@ export default function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [distributionDays, setDistributionDays] = useState(DISTRIBUTION_DAYS);
   const [syncStatus, setSyncStatus] = useState("loading"); // loading | synced | saving | error | offline
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [reportError, setReportError] = useState(null);
   const hydratedRef = useRef(false);
   const saveTimerRef = useRef(null);
 
@@ -2096,6 +2100,488 @@ export default function App() {
   const setSort = (key) => {
     if (sortBy === key) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
     else { setSortBy(key); setSortDir("desc"); }
+  };
+
+  const buildReportSnapshot = () => {
+    const formal = enriched.filter((p) => p.state !== "pre_pipeline" && p.state !== "not_applicable");
+
+    const catMap = {};
+    formal.forEach((p) => {
+      if (p.state === "cancelled") return;
+      if (!catMap[p.category]) catMap[p.category] = { value: 0, count: 0 };
+      catMap[p.category].value += p.estInitial;
+      catMap[p.category].count += 1;
+    });
+    const topCategories = Object.entries(catMap)
+      .map(([category, v]) => ({ category, value: v.value, count: v.count }))
+      .sort((a, b) => b.value - a.value);
+
+    const atRisk = enriched
+      .filter((p) => p.computed.risk.level === "critical" || p.computed.risk.level === "watch")
+      .filter((p) => p.state !== "pre_pipeline" && p.state !== "not_applicable")
+      .map((p) => ({
+        tender: p.tender,
+        pr: p.pr,
+        lot: p.lot,
+        method: p.method,
+        estInitial: p.estInitial,
+        riskLabel: p.computed.risk.label,
+        riskLevel: p.computed.risk.level,
+        buffer: p.computed.buffer,
+        narrative: p.narrative,
+        targetPO: p.targetPO || "",
+        estPODate: p.computed.estPODate ? toISODate(p.computed.estPODate) : "",
+      }))
+      .sort((a, b) => {
+        if (a.riskLevel !== b.riskLevel) return a.riskLevel === "critical" ? -1 : 1;
+        return (a.buffer ?? 9999) - (b.buffer ?? 9999);
+      });
+
+    const upcomingPOs = enriched
+      .filter((p) => p.state !== "cancelled" && p.state !== "pre_pipeline" && p.state !== "not_applicable")
+      .filter((p) => p.computed.estPODate)
+      .map((p) => ({
+        tender: p.tender,
+        pr: p.pr,
+        lot: p.lot,
+        method: p.method,
+        estInitial: p.estInitial,
+        targetPO: p.targetPO || "",
+        estPODate: toISODate(p.computed.estPODate),
+        daysOut: daysBetween(TODAY, p.computed.estPODate),
+      }))
+      .filter((u) => u.daysOut != null && u.daysOut >= 0 && u.daysOut <= 60)
+      .sort((a, b) => a.daysOut - b.daysOut);
+
+    return {
+      date: toISODate(TODAY),
+      portfolioTotal: totals.portfolioTotal,
+      activeTotal: totals.activeTotal,
+      cancelledTotal: totals.cancelledTotal,
+      countAll: totals.countAll,
+      countActive: totals.countActive,
+      countCancelled: totals.countCancelled,
+      countPipeline: totals.countPipeline,
+      ok: totals.ok,
+      watch: totals.watch,
+      critical: totals.critical,
+      avgVariance: avgVariance.toFixed(1),
+      topCategories,
+      atRisk,
+      upcomingPOs,
+    };
+  };
+
+  const buildReportPdf = async (snapshot, narrative) => {
+    const [{ default: jsPDF }, autoTableMod, regularUrl, boldUrl] = await Promise.all([
+      import("jspdf"),
+      import("jspdf-autotable"),
+      import("./src/fonts/IBMPlexSans-Regular.ttf?url").then((m) => m.default),
+      import("./src/fonts/IBMPlexSans-Bold.ttf?url").then((m) => m.default),
+    ]);
+    const autoTable = autoTableMod.default || autoTableMod;
+
+    // Helper: fetch a TTF and return a base64 binary string for jsPDF VFS
+    const fetchAsBase64 = async (url) => {
+      const buf = await fetch(url).then((r) => r.arrayBuffer());
+      const u8 = new Uint8Array(buf);
+      let bin = "";
+      const CHUNK = 0x8000;
+      for (let i = 0; i < u8.length; i += CHUNK) {
+        bin += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
+      }
+      return btoa(bin);
+    };
+
+    let FONT = "helvetica";
+    try {
+      const [regB64, boldB64] = await Promise.all([fetchAsBase64(regularUrl), fetchAsBase64(boldUrl)]);
+      // Will be created after the doc; defer call by stashing on outer scope
+      var _plexRegB64 = regB64;
+      var _plexBoldB64 = boldB64;
+    } catch (e) {
+      console.warn("IBM Plex Sans failed to load, falling back to Helvetica:", e);
+    }
+
+    const NAVY = [26, 46, 68];
+    const BLUE = [0, 159, 218];
+    const SLATE = [71, 85, 105];
+    const SLATE_LIGHT = [148, 163, 184];
+    const CRITICAL = [220, 38, 38];
+    const WATCH = [217, 119, 6];
+    const OK_GREEN = [22, 163, 74];
+    const TEAL = [15, 118, 110];
+    const VIOLET = [124, 58, 237];
+    const ROSE = [225, 29, 72];
+    const AMBER = [217, 119, 6];
+    const PALETTE = [BLUE, TEAL, VIOLET, ROSE, AMBER, [101, 163, 13]];
+
+    const doc = new jsPDF({ unit: "pt", format: "a4" });
+
+    // Register IBM Plex Sans if we managed to load it
+    if (_plexRegB64 && _plexBoldB64) {
+      try {
+        doc.addFileToVFS("IBMPlexSans-Regular.ttf", _plexRegB64);
+        doc.addFont("IBMPlexSans-Regular.ttf", "IBMPlexSans", "normal");
+        doc.addFileToVFS("IBMPlexSans-Bold.ttf", _plexBoldB64);
+        doc.addFont("IBMPlexSans-Bold.ttf", "IBMPlexSans", "bold");
+        FONT = "IBMPlexSans";
+      } catch (e) {
+        console.warn("Failed to register IBM Plex Sans in PDF:", e);
+      }
+    }
+
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 40;
+    const usd = (n) => "$" + Number(n || 0).toLocaleString("en-US");
+    const usdShort = (n) => {
+      const v = Number(n || 0);
+      if (Math.abs(v) >= 1e6) return "$" + (v / 1e6).toFixed(2) + "M";
+      if (Math.abs(v) >= 1e3) return "$" + (v / 1e3).toFixed(1) + "K";
+      return "$" + v.toFixed(0);
+    };
+
+    // ── Header band ──
+    doc.setFillColor(...NAVY);
+    doc.rect(0, 0, pageWidth, 92, "F");
+    doc.setFillColor(...BLUE);
+    doc.rect(0, 92, pageWidth, 3, "F");
+
+    doc.setTextColor(...BLUE);
+    doc.setFontSize(8);
+    doc.setFont(FONT, "bold");
+    doc.text("FAO HAITI · COUNTRY OFFICE · OSRO/HAI/061/CHA", margin, 30);
+
+    doc.setTextColor(255);
+    doc.setFontSize(18);
+    doc.setFont(FONT, "bold");
+    doc.text("Procurement Pipeline — Management Report", margin, 58);
+
+    doc.setFontSize(10);
+    doc.setFont(FONT, "normal");
+    doc.setTextColor(203, 213, 225);
+    doc.text(`Snapshot as of ${snapshot.date}`, margin, 78);
+
+    let y = 120;
+
+    // ── KPI cards (4 across) ──
+    const sectionTitle = (text, atY, atX = margin) => {
+      doc.setFillColor(...BLUE);
+      doc.rect(atX, atY - 4, 3, 12, "F");
+      doc.setTextColor(...NAVY);
+      doc.setFontSize(12);
+      doc.setFont(FONT, "bold");
+      doc.text(text, atX + 10, atY + 5);
+    };
+
+    sectionTitle("Portfolio at a glance", y);
+    y += 18;
+
+    const cardWidth = (pageWidth - margin * 2 - 12 * 3) / 4;
+    const cardHeight = 64;
+    const cards = [
+      { label: "Portfolio total", value: usdShort(snapshot.portfolioTotal), sub: `${snapshot.countActive + snapshot.countCancelled + snapshot.countPipeline} solicitations`, accent: NAVY },
+      { label: "Active value", value: usdShort(snapshot.activeTotal), sub: `${snapshot.countActive} active`, accent: BLUE },
+      { label: "On track", value: String(snapshot.ok), sub: `Watch ${snapshot.watch} · Critical ${snapshot.critical}`, accent: OK_GREEN },
+      { label: "Avg PR-to-PO variance", value: `${snapshot.avgVariance}%`, sub: "Across issued POs", accent: TEAL },
+    ];
+    cards.forEach((c, i) => {
+      const x = margin + i * (cardWidth + 12);
+      doc.setFillColor(248, 250, 252);
+      doc.roundedRect(x, y, cardWidth, cardHeight, 4, 4, "F");
+      doc.setFillColor(...c.accent);
+      doc.rect(x, y, 3, cardHeight, "F");
+      doc.setTextColor(...SLATE);
+      doc.setFontSize(7.5);
+      doc.setFont(FONT, "bold");
+      doc.text(c.label.toUpperCase(), x + 10, y + 14);
+      doc.setTextColor(...NAVY);
+      doc.setFontSize(15);
+      doc.setFont(FONT, "bold");
+      doc.text(c.value, x + 10, y + 36);
+      doc.setTextColor(...SLATE_LIGHT);
+      doc.setFontSize(8);
+      doc.setFont(FONT, "normal");
+      doc.text(c.sub, x + 10, y + 52);
+    });
+    y += cardHeight + 24;
+
+    // ── Two-column row: Risk donut + Top categories bar chart ──
+    const halfW = (pageWidth - margin * 2 - 18) / 2;
+    const chartTop = y;
+    const chartHeight = 170;
+
+    // Left card: Risk distribution donut
+    doc.setFillColor(255);
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(margin, chartTop, halfW, chartHeight, 4, 4, "FD");
+    sectionTitle("Risk distribution", chartTop + 12);
+
+    const totalRisk = snapshot.ok + snapshot.watch + snapshot.critical;
+    if (totalRisk > 0) {
+      const cx = margin + 70;
+      const cy = chartTop + 100;
+      const rOuter = 38;
+      const rInner = 22;
+      const segs = [
+        { v: snapshot.ok, color: OK_GREEN },
+        { v: snapshot.watch, color: WATCH },
+        { v: snapshot.critical, color: CRITICAL },
+      ].filter((s) => s.v > 0);
+      let a0 = -Math.PI / 2;
+      segs.forEach((s) => {
+        const a1 = a0 + (s.v / totalRisk) * Math.PI * 2;
+        // approximate arc as polygon
+        const steps = Math.max(8, Math.ceil(((a1 - a0) / (Math.PI * 2)) * 64));
+        doc.setFillColor(...s.color);
+        const poly = [];
+        for (let k = 0; k <= steps; k++) {
+          const t = a0 + (a1 - a0) * (k / steps);
+          poly.push([cx + Math.cos(t) * rOuter, cy + Math.sin(t) * rOuter]);
+        }
+        for (let k = steps; k >= 0; k--) {
+          const t = a0 + (a1 - a0) * (k / steps);
+          poly.push([cx + Math.cos(t) * rInner, cy + Math.sin(t) * rInner]);
+        }
+        const pts = poly.map(([px, py], idx) => (idx === 0 ? [px, py, "m"] : [px, py, "l"]));
+        doc.lines(
+          pts.slice(1).map(([px, py], idx) => [px - pts[idx][0], py - pts[idx][1]]),
+          pts[0][0], pts[0][1], [1, 1], "F", true,
+        );
+        a0 = a1;
+      });
+      doc.setTextColor(...NAVY);
+      doc.setFontSize(20);
+      doc.setFont(FONT, "bold");
+      doc.text(String(totalRisk), cx, cy + 4, { align: "center" });
+      doc.setTextColor(...SLATE);
+      doc.setFontSize(7);
+      doc.setFont(FONT, "normal");
+      doc.text("TOTAL", cx, cy + 16, { align: "center" });
+
+      // Legend
+      const lx = margin + 140;
+      let ly = chartTop + 60;
+      const legendItems = [
+        { v: snapshot.ok, color: OK_GREEN, label: "On track" },
+        { v: snapshot.watch, color: WATCH, label: "Watch" },
+        { v: snapshot.critical, color: CRITICAL, label: "Critical" },
+      ];
+      legendItems.forEach((it) => {
+        doc.setFillColor(...it.color);
+        doc.rect(lx, ly - 7, 9, 9, "F");
+        doc.setTextColor(...NAVY);
+        doc.setFontSize(9);
+        doc.setFont(FONT, "bold");
+        doc.text(it.label, lx + 14, ly);
+        doc.setTextColor(...SLATE);
+        doc.setFont(FONT, "normal");
+        const pct = totalRisk > 0 ? Math.round((it.v / totalRisk) * 100) : 0;
+        doc.text(`${it.v}  ·  ${pct}%`, lx + 14, ly + 12);
+        ly += 28;
+      });
+    } else {
+      doc.setTextColor(...SLATE);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "italic");
+      doc.text("No active risk data", margin + halfW / 2, chartTop + chartHeight / 2, { align: "center" });
+    }
+
+    // Right card: Top categories horizontal bar chart
+    const rightX = margin + halfW + 18;
+    doc.setFillColor(255);
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(rightX, chartTop, halfW, chartHeight, 4, 4, "FD");
+    sectionTitle("Top categories by value", chartTop + 12, rightX);
+
+    const cats = (snapshot.topCategories || []).slice(0, 6);
+    if (cats.length > 0) {
+      const maxV = Math.max(...cats.map((c) => c.value));
+      const barAreaX = rightX + 110;
+      const barAreaW = halfW - 110 - 80;
+      const startY = chartTop + 36;
+      const rowH = (chartHeight - 50) / cats.length;
+      cats.forEach((c, i) => {
+        const by = startY + i * rowH + 4;
+        const bw = maxV > 0 ? (c.value / maxV) * barAreaW : 0;
+        // label
+        doc.setTextColor(...NAVY);
+        doc.setFontSize(8);
+        doc.setFont(FONT, "bold");
+        const labelMax = 95;
+        const truncated = c.category.length > 22 ? c.category.slice(0, 20) + "…" : c.category;
+        doc.text(truncated, rightX + 10, by + 8);
+        // bar
+        doc.setFillColor(...PALETTE[i % PALETTE.length]);
+        doc.roundedRect(barAreaX, by, Math.max(bw, 1), 12, 1.5, 1.5, "F");
+        // value
+        doc.setTextColor(...SLATE);
+        doc.setFontSize(8);
+        doc.setFont(FONT, "normal");
+        doc.text(usdShort(c.value), barAreaX + Math.max(bw, 1) + 6, by + 9);
+      });
+    } else {
+      doc.setTextColor(...SLATE);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "italic");
+      doc.text("No data", rightX + halfW / 2, chartTop + chartHeight / 2, { align: "center" });
+    }
+
+    y = chartTop + chartHeight + 22;
+
+    // ── Executive summary ──
+    if (y > pageHeight - 200) { doc.addPage(); y = 50; }
+    sectionTitle("Executive summary", y);
+    y += 22;
+
+    doc.setTextColor(15, 23, 42);
+    doc.setFontSize(10);
+    doc.setFont(FONT, "normal");
+    const wrapped = doc.splitTextToSize(narrative, pageWidth - margin * 2);
+    const lineHeight = 14;
+    for (const line of wrapped) {
+      if (y > pageHeight - 60) {
+        doc.addPage();
+        y = 50;
+      }
+      doc.text(line, margin, y);
+      y += lineHeight;
+    }
+    y += 18;
+
+    if (y > pageHeight - 160) {
+      doc.addPage();
+      y = 50;
+    }
+    sectionTitle("Procurements requiring attention", y);
+    y += 18;
+    if (snapshot.atRisk.length === 0) {
+      doc.setTextColor(...SLATE);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "italic");
+      doc.text("No procurements are at watch or critical risk.", margin, y + 12);
+      y += 30;
+    } else {
+      autoTable(doc, {
+        startY: y,
+        head: [["Tender", "PR / Lot", "Method", "Value", "Risk", "Current status"]],
+        body: snapshot.atRisk.map((r) => [
+          r.tender,
+          r.lot ? `${r.pr} – ${r.lot}` : r.pr,
+          r.method,
+          usd(r.estInitial),
+          r.riskLabel,
+          r.narrative || "—",
+        ]),
+        theme: "grid",
+        headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", fontSize: 9, font: FONT },
+        bodyStyles: { fontSize: 8, textColor: [15, 23, 42], cellPadding: 4, font: FONT },
+        alternateRowStyles: { fillColor: [241, 245, 249] },
+        columnStyles: {
+          0: { cellWidth: 110 },
+          1: { cellWidth: 70 },
+          2: { cellWidth: 40, halign: "center" },
+          3: { cellWidth: 60, halign: "right" },
+          4: { cellWidth: 60 },
+          5: { cellWidth: "auto" },
+        },
+        didParseCell: (data) => {
+          if (data.section === "body" && data.column.index === 4) {
+            const row = snapshot.atRisk[data.row.index];
+            if (row?.riskLevel === "critical") {
+              data.cell.styles.textColor = CRITICAL;
+              data.cell.styles.fontStyle = "bold";
+            } else if (row?.riskLevel === "watch") {
+              data.cell.styles.textColor = WATCH;
+              data.cell.styles.fontStyle = "bold";
+            }
+          }
+        },
+        margin: { left: margin, right: margin },
+      });
+      y = doc.lastAutoTable.finalY + 22;
+    }
+
+    if (y > pageHeight - 160) {
+      doc.addPage();
+      y = 50;
+    }
+    sectionTitle("Upcoming PO milestones (next 60 days)", y);
+    y += 18;
+    if (snapshot.upcomingPOs.length === 0) {
+      doc.setTextColor(...SLATE);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "italic");
+      doc.text("No procurements are expected to close in the next 60 days.", margin, y + 12);
+    } else {
+      autoTable(doc, {
+        startY: y,
+        head: [["Tender", "PR / Lot", "Method", "Value", "Target PO", "Est. PO", "Days out"]],
+        body: snapshot.upcomingPOs.map((u) => [
+          u.tender,
+          u.lot ? `${u.pr} – ${u.lot}` : u.pr,
+          u.method,
+          usd(u.estInitial),
+          u.targetPO || "—",
+          u.estPODate || "—",
+          `${u.daysOut}d`,
+        ]),
+        theme: "grid",
+        headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", fontSize: 9, font: FONT },
+        bodyStyles: { fontSize: 8, textColor: [15, 23, 42], cellPadding: 4, font: FONT },
+        alternateRowStyles: { fillColor: [241, 245, 249] },
+        columnStyles: {
+          0: { cellWidth: "auto" },
+          2: { halign: "center", cellWidth: 40 },
+          3: { halign: "right", cellWidth: 70 },
+          4: { cellWidth: 65 },
+          5: { cellWidth: 65 },
+          6: { halign: "right", cellWidth: 50 },
+        },
+        margin: { left: margin, right: margin },
+      });
+    }
+
+    const pageCount = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(...SLATE_LIGHT);
+      doc.setFont(FONT, "normal");
+      doc.text(
+        `Generated ${snapshot.date} · FAO Haiti Procurement Pipeline Tracker · Page ${i} of ${pageCount}`,
+        margin,
+        pageHeight - 20,
+      );
+    }
+
+    return doc;
+  };
+
+  const generateReport = async () => {
+    if (isGeneratingReport) return;
+    setReportError(null);
+    setIsGeneratingReport(true);
+    try {
+      const snapshot = buildReportSnapshot();
+      const res = await fetch("/api/generate-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(snapshot),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Report API returned ${res.status}`);
+      }
+      const { narrative } = await res.json();
+      const doc = await buildReportPdf(snapshot, narrative);
+      doc.save(`FAO-Haiti-Management-Report-${snapshot.date}.pdf`);
+    } catch (err) {
+      setReportError(err.message || "Could not generate report");
+    } finally {
+      setIsGeneratingReport(false);
+    }
   };
 
   const exportToExcel = () => {
@@ -2251,6 +2737,43 @@ export default function App() {
         >
           <Download size={14} /> Export Excel
         </button>
+        <button
+          onClick={generateReport}
+          disabled={isGeneratingReport}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium text-white transition"
+          style={{
+            backgroundColor: isGeneratingReport ? "#94A3B8" : FAO_NAVY,
+            fontFamily: fontStack.body,
+            border: `1px solid ${isGeneratingReport ? "#94A3B8" : FAO_NAVY}`,
+            cursor: isGeneratingReport ? "wait" : "pointer",
+          }}
+          title="Generate a PDF management report with an AI-written executive summary"
+        >
+          {isGeneratingReport ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+          {isGeneratingReport ? "Generating…" : "Management report"}
+        </button>
+        {reportError && (
+          <div
+            className="text-xs px-3 py-1.5 rounded-md"
+            style={{
+              backgroundColor: "#FEE2E2",
+              color: "#991B1B",
+              fontFamily: fontStack.body,
+              border: "1px solid #FCA5A5",
+              maxWidth: 360,
+            }}
+            title={reportError}
+          >
+            Report failed: {reportError.length > 80 ? reportError.slice(0, 80) + "…" : reportError}
+            <button
+              onClick={() => setReportError(null)}
+              className="ml-2 underline"
+              style={{ color: "#991B1B" }}
+            >
+              dismiss
+            </button>
+          </div>
+        )}
         {tab === "pipeline" && (
           <div className="ml-auto flex items-center gap-2 flex-wrap">
             <Filter size={14} style={{ color: "#64748B" }} />
