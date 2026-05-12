@@ -72,12 +72,11 @@ const ITB_STAGES_BASE = [
   { key: "published", name: "Solicitation published (InTend)", defaultDays: 21 },
   { key: "clarifications", name: "Clarifications period", defaultDays: 0 },
   { key: "closing", name: "Bid closing & opening", defaultDays: 1 },
-  { key: "tech_eval", name: "Technical evaluation", defaultDays: 10 },
-  { key: "fin_eval", name: "Financial evaluation", defaultDays: 3 },
-  { key: "sanctions", name: "Sanctions screening", defaultDays: 2 },
+  { key: "tech_eval", name: "Technical evaluation", defaultDays: 15 },
+  { key: "fin_eval", name: "Financial evaluation", defaultDays: 5 },
   { key: "lpc_award", name: "LPC award review", defaultDays: 7 },
   { key: "award", name: "Award decision & notification", defaultDays: 3 },
-  { key: "po_create", name: "PO creation (GRMS)", defaultDays: 3 },
+  { key: "po_create", name: "PO creation (GRMS)", defaultDays: 4 },
   { key: "po_signed", name: "PO signed & issued", defaultDays: 2 },
 ];
 
@@ -89,17 +88,16 @@ const RFP_STAGES_BASE = [
   { key: "published", name: "Solicitation published (InTend)", defaultDays: 30 },
   { key: "clarifications", name: "Clarifications period", defaultDays: 0 },
   { key: "closing", name: "Bid closing & opening", defaultDays: 1 },
-  { key: "tech_eval", name: "Technical evaluation (env. 1)", defaultDays: 12 },
-  { key: "fin_eval", name: "Financial evaluation (env. 2)", defaultDays: 4 },
+  { key: "tech_eval", name: "Technical evaluation (env. 1)", defaultDays: 15 },
+  { key: "fin_eval", name: "Financial evaluation (env. 2)", defaultDays: 5 },
   { key: "combined", name: "Combined scoring & ranking", defaultDays: 2 },
-  { key: "sanctions", name: "Sanctions screening", defaultDays: 2 },
   { key: "lpc_award", name: "LPC award review", defaultDays: 7 },
   { key: "award", name: "Award decision & notification", defaultDays: 3 },
   { key: "negotiation", name: "Contract negotiation", defaultDays: 5 },
   { key: "contract_signed", name: "Contract signed", defaultDays: 3 },
 ];
 
-function buildStages(method, value, existingStages) {
+function buildStages(method, value, existingStages, deliveryDays = 0) {
   const base = method === "RFP" ? RFP_STAGES_BASE : ITB_STAGES_BASE;
   let stages = base.map((s) => ({ ...s }));
   if (value >= 500000) {
@@ -108,6 +106,9 @@ function buildStages(method, value, existingStages) {
   } else if (value >= 200000) {
     const idx = stages.findIndex((s) => s.key === "lpc_award");
     stages.splice(idx + 1, 0, { key: "rpc", name: "RPC review ($200K–$500K)", defaultDays: 7 });
+  }
+  if (deliveryDays > 0) {
+    stages.push({ key: "delivery", name: "Delivery of goods", defaultDays: deliveryDays });
   }
   if (existingStages) {
     stages = stages.map((s) => {
@@ -157,7 +158,8 @@ const SEED = [
 
 function initializeProcurements() {
   return SEED.map((p) => {
-    const stages = buildStages(p.method, p.estInitial);
+    const deliveryDays = p.category.startsWith("Inputs") ? 21 : 0;
+    const stages = buildStages(p.method, p.estInitial, undefined, deliveryDays);
     const withProgress = markProgressTo(
       stages,
       p.currentKey,
@@ -369,7 +371,7 @@ function StageEditor({ procurement, onUpdate }) {
     onUpdate({ ...procurement, stages });
   };
   const resetDefaults = () => {
-    const fresh = buildStages(procurement.method, procurement.estInitial);
+    const fresh = buildStages(procurement.method, procurement.estInitial, undefined, procurement.category.startsWith("Inputs") ? 21 : 0);
     const merged = fresh.map((f) => { const ex = procurement.stages.find((s) => s.key === f.key); return { ...f, status: ex?.status || "not_started" }; });
     onUpdate({ ...procurement, stages: merged });
   };
@@ -703,7 +705,7 @@ function computeTimeline(p) {
   return { stages: out, timelineStart: out.length ? out[0].stageStart : null, timelineEnd: out.length ? out[out.length - 1].stageEnd : null };
 }
 
-function GanttChart({ procurements, onUpdate }) {
+function GanttChart({ procurements, onUpdate, distributionDays, onDistributionDaysChange }) {
   const timelines = useMemo(() => procurements.map((p) => computeTimeline(p)), [procurements]);
 
   const { minDate, maxDate } = useMemo(() => {
@@ -711,12 +713,19 @@ function GanttChart({ procurements, onUpdate }) {
     dates.push(TODAY);
     // Always include the project end + 14 days so the deadline and distribution window are visible
     dates.push(PROJECT_END);
+    // Include buffer ends so per-procurement delay zones are not clipped
+    procurements.forEach((p, i) => {
+      const te = timelines[i]?.timelineEnd;
+      if (te && p.bufferEnabled && p.bufferDays) {
+        dates.push(addDays(te, Number(p.bufferDays) || 0));
+      }
+    });
     const min = new Date(Math.min(...dates.map((d) => d.getTime())));
     const max = new Date(Math.max(...dates.map((d) => d.getTime())));
     min.setDate(min.getDate() - 14);
     max.setDate(max.getDate() + 14);
     return { minDate: min, maxDate: max };
-  }, [timelines]);
+  }, [timelines, procurements]);
 
   const PX_PER_DAY = 5;
   const ROW_HEIGHT = 48;
@@ -738,6 +747,7 @@ function GanttChart({ procurements, onUpdate }) {
   }, [minDate, maxDate, dateToX]);
 
   const [drag, setDrag] = useState(null);
+  const [tooltip, setTooltip] = useState(null); // { x, y, name, days, start, end }
 
   const startDrag = (p) => (e) => {
     e.preventDefault();
@@ -777,10 +787,13 @@ function GanttChart({ procurements, onUpdate }) {
   }, [drag, procurements, onUpdate]);
 
   const todayX = dateToX(TODAY);
-  const distStartX = dateToX(DISTRIBUTION_START);
+  const distStart = new Date(PROJECT_END);
+  distStart.setDate(distStart.getDate() - distributionDays);
+  const distStartX = dateToX(distStart);
   const projectEndX = dateToX(PROJECT_END);
 
   return (
+    <>
     <div className="rounded-xl border bg-white overflow-hidden" style={{ borderColor: "#E2E8F0" }}>
       <div className="p-4 border-b flex items-center justify-between flex-wrap gap-3" style={{ borderColor: "#E2E8F0" }}>
         <div className="flex items-center gap-3">
@@ -789,8 +802,19 @@ function GanttChart({ procurements, onUpdate }) {
             <h3 className="text-sm font-bold" style={{ color: FAO_NAVY, fontFamily: fontStack.display }}>
               Timeline — each segment is a workflow stage · drag a bar to shift all dates
             </h3>
-            <div className="text-[10px] mt-0.5" style={{ color: "#64748B", fontFamily: fontStack.body }}>
-              Project ends <span className="font-semibold" style={{ color: "#DC2626" }}>19 Oct 2026</span> · distribution window starts <span className="font-semibold" style={{ color: "#D97706" }}>{fmtDate(DISTRIBUTION_START)}</span> · goods must be delivered before that date
+            <div className="text-[10px] mt-0.5 flex items-center gap-2 flex-wrap" style={{ color: "#64748B", fontFamily: fontStack.body }}>
+              Project ends <span className="font-semibold" style={{ color: "#DC2626" }}>19 Oct 2026</span> · distribution window starts <span className="font-semibold" style={{ color: "#D97706" }}>{fmtDate(distStart)}</span> · goods must be delivered before that date
+              <span className="flex items-center gap-1 ml-2">
+                <span style={{ color: "#D97706" }}>Distribution:</span>
+                <input
+                  type="number" min="1" max="365"
+                  value={distributionDays}
+                  onChange={(e) => { const v = parseInt(e.target.value); if (!isNaN(v) && v > 0) onDistributionDaysChange(v); }}
+                  className="w-12 text-center px-1 py-0 rounded border text-[10px] tabular-nums"
+                  style={{ borderColor: "#D97706", color: "#D97706", fontFamily: fontStack.mono, outline: "none", background: "#FFFBEB" }}
+                />
+                <span style={{ color: "#D97706" }}>days</span>
+              </span>
             </div>
           </div>
         </div>
@@ -802,6 +826,7 @@ function GanttChart({ procurements, onUpdate }) {
           <span style={{ color: "#64748B" }}>|</span>
           <span style={{ color: "#DC2626" }}>▮ today</span>
           <span style={{ color: "#F97316" }}>▨ distribution</span>
+          <span style={{ color: "#C2410C" }}>▨ buffer / delay</span>
           <span style={{ color: "#DC2626" }}>| project end</span>
         </div>
       </div>
@@ -844,8 +869,31 @@ function GanttChart({ procurements, onUpdate }) {
                   <CategoryDot category={p.category} />
                   <div className="min-w-0 flex-1">
                     <div className="text-xs font-semibold truncate" style={{ color: "#0F172A", fontFamily: fontStack.body }}>{p.tender}</div>
-                    <div className="text-[10px]" style={{ color: "#64748B", fontFamily: fontStack.mono }}>
-                      {p.pr}{p.lot && ` · ${p.lot}`}
+                    <div className="text-[10px] flex items-center gap-1.5" style={{ color: "#64748B", fontFamily: fontStack.mono }}>
+                      <span>{p.pr}{p.lot && ` · ${p.lot}`}</span>
+                      <span style={{ color: "#CBD5E1" }}>·</span>
+                      <label className="flex items-center gap-1 cursor-pointer select-none" style={{ color: p.bufferEnabled ? "#C2410C" : "#94A3B8", fontFamily: fontStack.body }}
+                        onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={!!p.bufferEnabled}
+                          onChange={(e) => onUpdate({ ...p, bufferEnabled: e.target.checked, bufferDays: p.bufferDays ?? 14 })}
+                          className="w-3 h-3 cursor-pointer"
+                          style={{ accentColor: "#C2410C" }}
+                        />
+                        Buffer
+                        {p.bufferEnabled && (
+                          <input
+                            type="number" min="0" max="365"
+                            value={p.bufferDays ?? 14}
+                            onChange={(e) => { const v = parseInt(e.target.value); onUpdate({ ...p, bufferDays: isNaN(v) ? 0 : v }); }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-8 text-center text-[10px] tabular-nums rounded border px-0.5"
+                            style={{ borderColor: "#FED7AA", color: "#C2410C", background: "#FFF7ED", fontFamily: fontStack.mono, outline: "none" }}
+                          />
+                        )}
+                        {p.bufferEnabled && <span>d</span>}
+                      </label>
                     </div>
                   </div>
                   <RiskPill risk={computed.risk} compact />
@@ -881,7 +929,7 @@ function GanttChart({ procurements, onUpdate }) {
                     const { fill, opacity } = STAGE_STATUS_COLORS[s.status] || STAGE_STATUS_COLORS.not_started;
                     const isActive = s.status === "in_progress";
                     return (
-                      <div key={s.key} className="absolute pointer-events-none"
+                      <div key={s.key} className="absolute"
                         style={{
                           left: x, top: 10, width: w, height: 28,
                           backgroundColor: fill, opacity,
@@ -891,11 +939,39 @@ function GanttChart({ procurements, onUpdate }) {
                           borderBottom: isActive ? `2px solid ${fill}` : undefined,
                           borderRadius: si === 0 ? "3px 0 0 3px" : si === timedStages.length - 1 ? "0 3px 3px 0" : 0,
                           boxShadow: isActive ? `0 0 0 1px ${fill}` : undefined,
+                          cursor: "default",
+                          zIndex: 5,
                         }}
-                        title={`${s.name}\n${fmtDate(s.stageStart)} → ${fmtDate(s.stageEnd)} (${s.plannedDays}d)`}
+                        onMouseEnter={(e) => setTooltip({ x: e.clientX, y: e.clientY, name: s.name, days: s.plannedDays, start: s.stageStart, end: s.stageEnd })}
+                        onMouseMove={(e) => setTooltip((t) => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
+                        onMouseLeave={() => setTooltip(null)}
                       />
                     );
                   })}
+
+                  {/* Buffer / delay zone (after last stage) */}
+                  {p.bufferEnabled && (p.bufferDays ?? 0) > 0 && timelineEnd && (() => {
+                    const bufStart = new Date(timelineEnd);
+                    const bufEnd = addDays(bufStart, Number(p.bufferDays) || 0);
+                    const bx = dateToX(bufStart);
+                    const bw = Math.max(dateToX(bufEnd) - bx, 1);
+                    return (
+                      <div className="absolute"
+                        style={{
+                          left: bx, top: 10, width: bw, height: 28,
+                          backgroundColor: "#FFEDD5",
+                          border: "1.5px dashed #C2410C",
+                          backgroundImage: "repeating-linear-gradient(45deg,transparent,transparent 4px,rgba(194,65,12,0.18) 4px,rgba(194,65,12,0.18) 8px)",
+                          borderRadius: 3,
+                          cursor: "default",
+                          zIndex: 4,
+                        }}
+                        onMouseEnter={(e) => setTooltip({ x: e.clientX, y: e.clientY, name: "Buffer / delay", days: p.bufferDays, start: bufStart, end: bufEnd })}
+                        onMouseMove={(e) => setTooltip((t) => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
+                        onMouseLeave={() => setTooltip(null)}
+                      />
+                    );
+                  })()}
 
                   {/* End date label on drag */}
                   {drag && drag.id === p.id && (
@@ -911,6 +987,19 @@ function GanttChart({ procurements, onUpdate }) {
         </div>
       </div>
     </div>
+    {tooltip && (
+      <div className="fixed z-50 pointer-events-none px-3 py-2 rounded-lg shadow-lg text-xs"
+        style={{
+          left: tooltip.x + 14, top: tooltip.y - 10,
+          backgroundColor: FAO_NAVY, color: "#fff",
+          fontFamily: fontStack.body, whiteSpace: "nowrap",
+          border: "1px solid rgba(255,255,255,0.15)",
+        }}>
+        <div className="font-semibold mb-0.5" style={{ fontFamily: fontStack.display }}>{tooltip.name}</div>
+        <div style={{ color: "#93C5FD" }}>{tooltip.days}d &nbsp;·&nbsp; {fmtDate(tooltip.start)} → {fmtDate(tooltip.end)}</div>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -1396,8 +1485,16 @@ function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, s
                         </div>
                       )}
                     </td>
-                    <td className="px-3 py-3 text-center text-sm tabular-nums" style={{ color: p.nBids != null && p.nBids < 3 ? "#B45309" : "#334155", fontFamily: fontStack.mono }}>
-                      {p.nBids != null ? <>{p.nBids}{p.nBids < 3 && " ⚠"}</> : "—"}
+                    <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="number" min="0"
+                        value={p.nBids ?? ""}
+                        placeholder="—"
+                        onChange={(e) => updateProcurement({ ...p, nBids: e.target.value === "" ? null : Number(e.target.value) })}
+                        className="w-14 text-center px-1 py-0.5 rounded border text-sm tabular-nums bg-transparent"
+                        style={{ borderColor: "#CBD5E1", fontFamily: fontStack.mono, color: p.nBids != null && p.nBids < 3 ? "#B45309" : "#334155", outline: "none" }}
+                      />
+                      {p.nBids != null && p.nBids < 3 && <span style={{ color: "#B45309", fontSize: 11 }}> ⚠</span>}
                     </td>
                     <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                       <input
@@ -1493,8 +1590,8 @@ function AddProcurementModal({ onAdd, onClose }) {
   };
 
   const availableStages = useMemo(
-    () => buildStages(form.method, Number(form.estInitial) || 0),
-    [form.method, form.estInitial]
+    () => buildStages(form.method, Number(form.estInitial) || 0, undefined, form.category.startsWith("Inputs") ? 21 : 0),
+    [form.method, form.estInitial, form.category]
   );
 
   const validate = () => {
@@ -1512,7 +1609,7 @@ function AddProcurementModal({ onAdd, onClose }) {
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
 
     const id = `${form.pr.trim()}${form.lot.trim() ? `-${form.lot.trim().replace(/\s+/g, "")}` : ""}-${Date.now()}`;
-    const stages = buildStages(form.method, Number(form.estInitial));
+    const stages = buildStages(form.method, Number(form.estInitial), undefined, form.category.startsWith("Inputs") ? 21 : 0);
     const currentStatus = form.state === "on_hold" || form.state === "cancelled" ? "blocked" : "in_progress";
     const withProgress = markProgressTo(stages, form.currentKey, currentStatus);
 
@@ -1852,6 +1949,22 @@ function LoginGate({ onAuth }) {
   );
 }
 
+function SyncBadge({ status }) {
+  const cfg = {
+    loading: { color: "#94A3B8", dot: "#94A3B8", label: "Loading…" },
+    saving:  { color: "#FCD34D", dot: "#FCD34D", label: "Saving…" },
+    synced:  { color: "#86EFAC", dot: "#22C55E", label: "Saved" },
+    error:   { color: "#FCA5A5", dot: "#DC2626", label: "Save failed" },
+    offline: { color: "#FCA5A5", dot: "#DC2626", label: "Offline" },
+  }[status] || { color: "#94A3B8", dot: "#94A3B8", label: status };
+  return (
+    <div className="flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.06)", color: cfg.color, fontFamily: fontStack.body, fontSize: 11 }}>
+      <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ backgroundColor: cfg.dot }} />
+      {cfg.label}
+    </div>
+  );
+}
+
 export default function App() {
   const [authed, setAuthed] = useState(false);
   const [procurements, setProcurements] = useState(initializeProcurements);
@@ -1862,6 +1975,66 @@ export default function App() {
   const [sortBy, setSortBy] = useState("estPO");
   const [sortDir, setSortDir] = useState("desc");
   const [showAdd, setShowAdd] = useState(false);
+  const [distributionDays, setDistributionDays] = useState(DISTRIBUTION_DAYS);
+  const [syncStatus, setSyncStatus] = useState("loading"); // loading | synced | saving | error | offline
+  const hydratedRef = useRef(false);
+  const saveTimerRef = useRef(null);
+
+  // Load state from server on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/state", { cache: "no-store" });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const { data } = await r.json();
+        if (cancelled) return;
+        if (data && Array.isArray(data.procurements) && data.procurements.length > 0) {
+          // Rehydrate stage arrays through buildStages so any new keys (e.g. delivery) are merged in
+          const merged = data.procurements.map((p) => {
+            const deliveryDays = p.category && p.category.startsWith("Inputs") ? 21 : 0;
+            const stages = buildStages(p.method, p.estInitial, p.stages, deliveryDays);
+            return { ...p, stages };
+          });
+          setProcurements(merged);
+        } else {
+          // First load — push the seed to the server so it becomes the source of truth
+          const seeded = initializeProcurements();
+          setProcurements(seeded);
+        }
+        if (typeof data?.distributionDays === "number") setDistributionDays(data.distributionDays);
+        hydratedRef.current = true;
+        setSyncStatus("synced");
+      } catch (e) {
+        console.error("Load failed:", e);
+        setSyncStatus("offline");
+        hydratedRef.current = true; // still allow local edits
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Debounced save whenever data changes (after initial hydration)
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    setSyncStatus("saving");
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        const r = await fetch("/api/state", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ procurements, distributionDays }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        setSyncStatus("synced");
+      } catch (e) {
+        console.error("Save failed:", e);
+        setSyncStatus("error");
+      }
+    }, 600);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [procurements, distributionDays]);
 
   const handleAdd = useCallback((newProc) => {
     setProcurements((prev) => [newProc, ...prev]);
@@ -2039,7 +2212,10 @@ export default function App() {
             <h1 className="text-2xl font-bold leading-tight" style={{ fontFamily: fontStack.display, letterSpacing: "-0.01em" }}>Procurement Pipeline Tracker</h1>
             <div className="text-sm mt-1" style={{ color: "#CBD5E1", fontFamily: fontStack.body }}>Standardized stages · plan-vs-actual timeline · risk monitoring · PM: Costantino, Claudio (FLHAI)</div>
           </div>
-          <div className="text-xs" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>{fmtDate(TODAY)}</div>
+          <div className="flex items-center gap-3">
+            <SyncBadge status={syncStatus} />
+            <div className="text-xs" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>{fmtDate(TODAY)}</div>
+          </div>
         </div>
       </header>
 
@@ -2117,7 +2293,7 @@ export default function App() {
             </div>
           </>
         )}
-        {tab === "gantt" && <GanttChart procurements={filtered} onUpdate={updateProcurement} />}
+        {tab === "gantt" && <GanttChart procurements={filtered} onUpdate={updateProcurement} distributionDays={distributionDays} onDistributionDaysChange={setDistributionDays} />}
         {tab === "analytics" && <AnalyticsTab enriched={enriched} />}
         {tab === "upcoming" && <UpcomingActivities enriched={enriched} />}
       </div>
