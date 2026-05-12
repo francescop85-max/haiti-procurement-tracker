@@ -484,24 +484,73 @@ function StageEditor({ procurement, onUpdate }) {
   );
 }
 
+const STAGE_STATUS_COLORS = {
+  complete:    { fill: "#15803D", opacity: 0.75 },
+  in_progress: { fill: "#009FDA", opacity: 0.90 },
+  not_started: { fill: "#CBD5E1", opacity: 1.00 },
+  blocked:     { fill: "#D97706", opacity: 0.85 },
+  skipped:     { fill: "#94A3B8", opacity: 0.45 },
+};
+
+// Computes absolute start/end dates for every stage, anchored to real bid dates.
+// Anchor priority: closing date → opening date → ganttAnchor field → TODAY at in-progress stage.
+function computeTimeline(p) {
+  const stages = p.stages;
+  let anchorIdx = -1;
+  let anchorDate = null;
+
+  const closingDate = parseDate(p.closing);
+  const openingDate = parseDate(p.opening);
+  if (closingDate) {
+    const i = stages.findIndex((s) => s.key === "closing");
+    if (i !== -1) { anchorIdx = i; anchorDate = closingDate; }
+  }
+  if (anchorIdx === -1 && openingDate) {
+    const i = stages.findIndex((s) => s.key === "published");
+    if (i !== -1) { anchorIdx = i; anchorDate = openingDate; }
+  }
+  if (anchorIdx === -1) {
+    anchorIdx = stages.findIndex((s) => s.status === "in_progress");
+    if (anchorIdx === -1) anchorIdx = stages.findIndex((s) => s.status !== "complete");
+    if (anchorIdx === -1) anchorIdx = 0;
+    if (p.ganttAnchor) {
+      const base = parseDate(p.ganttAnchor);
+      const offset = stages.slice(0, anchorIdx).reduce((s, st) => s + (Number(st.plannedDays) || 0), 0);
+      anchorDate = addDays(base, offset);
+    } else {
+      anchorDate = TODAY;
+    }
+  }
+
+  const out = stages.map((s) => ({ ...s, stageStart: null, stageEnd: null }));
+  out[anchorIdx].stageStart = anchorDate;
+  out[anchorIdx].stageEnd = addDays(anchorDate, Number(out[anchorIdx].plannedDays) || 0);
+  for (let i = anchorIdx + 1; i < out.length; i++) {
+    out[i].stageStart = out[i - 1].stageEnd;
+    out[i].stageEnd = addDays(out[i].stageStart, Number(out[i].plannedDays) || 0);
+  }
+  for (let i = anchorIdx - 1; i >= 0; i--) {
+    out[i].stageEnd = out[i + 1].stageStart;
+    out[i].stageStart = addDays(out[i].stageEnd, -(Number(out[i].plannedDays) || 0));
+  }
+  return { stages: out, timelineStart: out[0].stageStart, timelineEnd: out[out.length - 1].stageEnd };
+}
+
 function GanttChart({ procurements, onUpdate }) {
-  const allDates = procurements.flatMap((p) => [parseDate(p.opening), parseDate(p.closing), parseDate(p.targetPO)]).filter(Boolean);
-  const minDate = useMemo(() => {
-    const min = new Date(Math.min(...allDates.map((d) => d.getTime()), TODAY.getTime()));
-    min.setDate(1);
-    min.setDate(min.getDate() - 7);
-    return min;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [procurements.length]);
-  const maxDate = useMemo(() => {
-    const max = new Date(Math.max(...allDates.map((d) => d.getTime()), TODAY.getTime()));
-    max.setDate(max.getDate() + 45);
-    return max;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [procurements.length]);
+  const timelines = useMemo(() => procurements.map((p) => computeTimeline(p)), [procurements]);
+
+  const { minDate, maxDate } = useMemo(() => {
+    const dates = timelines.flatMap((t) => [t.timelineStart, t.timelineEnd]).filter(Boolean);
+    dates.push(TODAY);
+    const min = new Date(Math.min(...dates.map((d) => d.getTime())));
+    const max = new Date(Math.max(...dates.map((d) => d.getTime())));
+    min.setDate(min.getDate() - 14);
+    max.setDate(max.getDate() + 30);
+    return { minDate: min, maxDate: max };
+  }, [timelines]);
 
   const PX_PER_DAY = 5;
-  const ROW_HEIGHT = 44;
+  const ROW_HEIGHT = 48;
   const LABEL_WIDTH = 280;
   const totalDays = Math.ceil((maxDate - minDate) / 86400000);
   const chartWidth = totalDays * PX_PER_DAY;
@@ -521,21 +570,21 @@ function GanttChart({ procurements, onUpdate }) {
 
   const [drag, setDrag] = useState(null);
 
-  const startDragRight = (p) => (e) => {
+  const startDrag = (p) => (e) => {
     e.preventDefault();
     e.stopPropagation();
-    const original = parseDate(p.targetPO);
-    if (!original) return;
-    setDrag({ type: "right", id: p.id, startX: e.clientX, originalTarget: original });
-  };
-
-  const startDragMove = (p) => (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const originalTarget = parseDate(p.targetPO);
-    const originalOpening = parseDate(p.opening);
-    const originalClosing = parseDate(p.closing);
-    setDrag({ type: "move", id: p.id, startX: e.clientX, originalTarget, originalOpening, originalClosing });
+    const closingDate = parseDate(p.closing);
+    const openingDate = parseDate(p.opening);
+    let anchorType, originalAnchorDate;
+    if (closingDate && p.stages.some((s) => s.key === "closing")) {
+      anchorType = "closing"; originalAnchorDate = closingDate;
+    } else if (openingDate && p.stages.some((s) => s.key === "published")) {
+      anchorType = "opening"; originalAnchorDate = openingDate;
+    } else {
+      anchorType = "ganttAnchor";
+      originalAnchorDate = parseDate(p.ganttAnchor) || TODAY;
+    }
+    setDrag({ id: p.id, startX: e.clientX, anchorType, originalAnchorDate });
   };
 
   useEffect(() => {
@@ -545,25 +594,17 @@ function GanttChart({ procurements, onUpdate }) {
       const dayDelta = Math.round(dx / PX_PER_DAY);
       const proc = procurements.find((p) => p.id === drag.id);
       if (!proc) return;
-      if (drag.type === "right") {
-        const newTarget = addDays(drag.originalTarget, dayDelta);
-        onUpdate({ ...proc, targetPO: toISODate(newTarget) });
-      } else {
-        onUpdate({
-          ...proc,
-          opening: drag.originalOpening ? toISODate(addDays(drag.originalOpening, dayDelta)) : proc.opening,
-          closing: drag.originalClosing ? toISODate(addDays(drag.originalClosing, dayDelta)) : proc.closing,
-          targetPO: drag.originalTarget ? toISODate(addDays(drag.originalTarget, dayDelta)) : proc.targetPO,
-        });
-      }
+      const newAnchorDate = addDays(drag.originalAnchorDate, dayDelta);
+      const updates = { [drag.anchorType]: toISODate(newAnchorDate) };
+      // Recompute timeline end to sync targetPO
+      const { timelineEnd } = computeTimeline({ ...proc, ...updates });
+      updates.targetPO = toISODate(timelineEnd);
+      onUpdate({ ...proc, ...updates });
     };
     const onUp = () => setDrag(null);
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
   }, [drag, procurements, onUpdate]);
 
   const todayX = dateToX(TODAY);
@@ -574,21 +615,22 @@ function GanttChart({ procurements, onUpdate }) {
         <div className="flex items-center gap-3">
           <GanttChartSquare size={18} style={{ color: FAO_NAVY }} />
           <h3 className="text-sm font-bold" style={{ color: FAO_NAVY, fontFamily: fontStack.display }}>
-            Timeline — drag a bar to move it, drag the right edge to resize
+            Timeline — each segment is a workflow stage · drag a bar to shift all dates
           </h3>
         </div>
         <div className="flex items-center gap-3 text-[10px] flex-wrap" style={{ fontFamily: fontStack.body }}>
-          <LegendDot color="#16A34A" label="On track" />
-          <LegendDot color="#D97706" label="Watch" />
-          <LegendDot color="#DC2626" label="Critical" />
+          <LegendDot color="#15803D" label="Complete" />
+          <LegendDot color="#009FDA" label="In progress" />
+          <LegendDot color="#CBD5E1" label="Not started" />
+          <LegendDot color="#D97706" label="Blocked" />
           <span style={{ color: "#64748B" }}>|</span>
-          <span style={{ color: "#0F172A" }}>◆ est. PO</span>
           <span style={{ color: "#DC2626" }}>▮ today</span>
         </div>
       </div>
 
       <div className="overflow-x-auto">
         <div style={{ width: LABEL_WIDTH + chartWidth, minWidth: "100%" }}>
+          {/* Month header */}
           <div className="flex sticky top-0 z-10" style={{ backgroundColor: "#F8FAFC", borderBottom: "1px solid #E2E8F0", height: 32 }}>
             <div style={{ width: LABEL_WIDTH, borderRight: "1px solid #E2E8F0" }} />
             <div className="relative" style={{ width: chartWidth, height: 32 }}>
@@ -602,21 +644,16 @@ function GanttChart({ procurements, onUpdate }) {
           </div>
 
           {procurements.map((p, idx) => {
+            const { stages: timedStages, timelineEnd } = timelines[idx];
             const computed = computeProcurement(p);
-            const startDate = parseDate(p.opening) || parseDate(p.closing) || addDays(TODAY, -30);
-            const targetDate = parseDate(p.targetPO);
-            const estDate = computed.estPODate;
-            const barX = dateToX(startDate);
-            const targetX = targetDate ? dateToX(targetDate) : barX + 60;
-            const estX = dateToX(estDate);
-            const barWidth = Math.max(targetX - barX, 8);
-            const riskColor = computed.risk.level === "ok" ? "#16A34A" : computed.risk.level === "watch" ? "#D97706" : computed.risk.level === "critical" ? "#DC2626" : "#94A3B8";
-            const isOverrun = computed.buffer != null && computed.buffer < 0;
+            const endX = dateToX(timelineEnd);
 
             return (
-              <div key={p.id} className="flex border-b items-center"
+              <div key={p.id} className="flex border-b"
                 style={{ borderColor: "#F1F5F9", height: ROW_HEIGHT, backgroundColor: idx % 2 === 0 ? "white" : "#FAFBFC" }}>
-                <div className="px-4 py-2 flex items-center gap-2 flex-shrink-0" style={{ width: LABEL_WIDTH, borderRight: "1px solid #E2E8F0" }}>
+
+                {/* Label column */}
+                <div className="px-4 flex items-center gap-2 flex-shrink-0" style={{ width: LABEL_WIDTH, borderRight: "1px solid #E2E8F0" }}>
                   <CategoryDot category={p.category} />
                   <div className="min-w-0 flex-1">
                     <div className="text-xs font-semibold truncate" style={{ color: "#0F172A", fontFamily: fontStack.body }}>{p.tender}</div>
@@ -627,32 +664,47 @@ function GanttChart({ procurements, onUpdate }) {
                   <RiskPill risk={computed.risk} compact />
                 </div>
 
-                <div className="relative" style={{ width: chartWidth, height: ROW_HEIGHT }}>
+                {/* Chart column */}
+                <div className="relative cursor-grab active:cursor-grabbing" style={{ width: chartWidth, height: ROW_HEIGHT }}
+                  onMouseDown={startDrag(p)}>
+
+                  {/* Month grid lines */}
                   {months.map((m, i) => (
-                    <div key={i} className="absolute top-0 h-full" style={{ left: m.x, width: 1, backgroundColor: "#F1F5F9" }} />
+                    <div key={i} className="absolute top-0 h-full pointer-events-none" style={{ left: m.x, width: 1, backgroundColor: "#F1F5F9" }} />
                   ))}
+
+                  {/* Today line */}
                   <div className="absolute top-0 h-full pointer-events-none" style={{ left: todayX, width: 1.5, backgroundColor: "#DC2626", opacity: 0.5 }} />
-                  <div onMouseDown={startDragMove(p)} className="absolute rounded cursor-grab active:cursor-grabbing"
-                    style={{ left: barX, top: 12, width: barWidth - 6, height: 20, backgroundColor: riskColor, opacity: 0.25, border: `1.5px solid ${riskColor}` }}
-                    title="Drag to move" />
-                  <div onMouseDown={startDragRight(p)} className="absolute cursor-ew-resize flex items-center justify-center"
-                    style={{ left: targetX - 6, top: 8, width: 12, height: 28 }}
-                    title={`Target: ${fmtDate(targetDate)} — drag to change`}>
-                    <div style={{ width: 4, height: 24, backgroundColor: riskColor, borderRadius: 2, boxShadow: "0 0 0 1px white, 0 1px 3px rgba(0,0,0,0.15)" }} />
-                  </div>
-                  {p.state !== "cancelled" && (
-                    <div className="absolute pointer-events-none" style={{ left: estX - 6, top: 14, width: 12, height: 16 }} title={`Est. PO: ${fmtDate(estDate)}`}>
-                      <div style={{ width: 12, height: 12, backgroundColor: "#0F172A", transform: "rotate(45deg)", marginTop: 2, boxShadow: "0 0 0 1.5px white" }} />
-                    </div>
-                  )}
-                  {isOverrun && estX > targetX && (
-                    <div className="absolute pointer-events-none"
-                      style={{ left: targetX, top: 12, width: estX - targetX, height: 20, backgroundColor: "#DC2626", opacity: 0.15, backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(220,38,38,0.4) 4px, rgba(220,38,38,0.4) 6px)" }} />
-                  )}
+
+                  {/* Stage segments */}
+                  {timedStages.map((s, si) => {
+                    const x = dateToX(s.stageStart);
+                    const w = Math.max(dateToX(s.stageEnd) - x, s.plannedDays > 0 ? 1 : 0);
+                    if (w === 0) return null;
+                    const { fill, opacity } = STAGE_STATUS_COLORS[s.status] || STAGE_STATUS_COLORS.not_started;
+                    const isActive = s.status === "in_progress";
+                    return (
+                      <div key={s.key} className="absolute pointer-events-none"
+                        style={{
+                          left: x, top: 10, width: w, height: 28,
+                          backgroundColor: fill, opacity,
+                          borderLeft: si === 0 ? `2px solid ${fill}` : "1px solid white",
+                          borderRight: "1px solid white",
+                          borderTop: isActive ? `2px solid ${fill}` : undefined,
+                          borderBottom: isActive ? `2px solid ${fill}` : undefined,
+                          borderRadius: si === 0 ? "3px 0 0 3px" : si === timedStages.length - 1 ? "0 3px 3px 0" : 0,
+                          boxShadow: isActive ? `0 0 0 1px ${fill}` : undefined,
+                        }}
+                        title={`${s.name}\n${fmtDate(s.stageStart)} → ${fmtDate(s.stageEnd)} (${s.plannedDays}d)`}
+                      />
+                    );
+                  })}
+
+                  {/* End date label on drag */}
                   {drag && drag.id === p.id && (
-                    <div className="absolute z-20 px-2 py-1 rounded text-[10px] text-white font-semibold pointer-events-none"
-                      style={{ left: targetX, top: -6, backgroundColor: FAO_NAVY, fontFamily: fontStack.mono, whiteSpace: "nowrap" }}>
-                      {fmtDate(targetDate)}
+                    <div className="absolute z-20 px-2 py-0.5 rounded text-[10px] text-white font-semibold pointer-events-none"
+                      style={{ left: endX + 4, top: 14, backgroundColor: FAO_NAVY, fontFamily: fontStack.mono, whiteSpace: "nowrap" }}>
+                      PO {fmtDate(timelineEnd)}
                     </div>
                   )}
                 </div>
