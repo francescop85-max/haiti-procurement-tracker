@@ -521,12 +521,21 @@ function GanttChart({ procurements, onUpdate }) {
 
   const [drag, setDrag] = useState(null);
 
-  const startDrag = (p) => (e) => {
+  const startDragRight = (p) => (e) => {
     e.preventDefault();
     e.stopPropagation();
     const original = parseDate(p.targetPO);
     if (!original) return;
-    setDrag({ id: p.id, startX: e.clientX, originalDate: original });
+    setDrag({ type: "right", id: p.id, startX: e.clientX, originalTarget: original });
+  };
+
+  const startDragMove = (p) => (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const originalTarget = parseDate(p.targetPO);
+    const originalOpening = parseDate(p.opening);
+    const originalClosing = parseDate(p.closing);
+    setDrag({ type: "move", id: p.id, startX: e.clientX, originalTarget, originalOpening, originalClosing });
   };
 
   useEffect(() => {
@@ -534,10 +543,19 @@ function GanttChart({ procurements, onUpdate }) {
     const onMove = (e) => {
       const dx = e.clientX - drag.startX;
       const dayDelta = Math.round(dx / PX_PER_DAY);
-      const newDate = addDays(drag.originalDate, dayDelta);
       const proc = procurements.find((p) => p.id === drag.id);
       if (!proc) return;
-      onUpdate({ ...proc, targetPO: toISODate(newDate) });
+      if (drag.type === "right") {
+        const newTarget = addDays(drag.originalTarget, dayDelta);
+        onUpdate({ ...proc, targetPO: toISODate(newTarget) });
+      } else {
+        onUpdate({
+          ...proc,
+          opening: drag.originalOpening ? toISODate(addDays(drag.originalOpening, dayDelta)) : proc.opening,
+          closing: drag.originalClosing ? toISODate(addDays(drag.originalClosing, dayDelta)) : proc.closing,
+          targetPO: drag.originalTarget ? toISODate(addDays(drag.originalTarget, dayDelta)) : proc.targetPO,
+        });
+      }
     };
     const onUp = () => setDrag(null);
     window.addEventListener("mousemove", onMove);
@@ -556,7 +574,7 @@ function GanttChart({ procurements, onUpdate }) {
         <div className="flex items-center gap-3">
           <GanttChartSquare size={18} style={{ color: FAO_NAVY }} />
           <h3 className="text-sm font-bold" style={{ color: FAO_NAVY, fontFamily: fontStack.display }}>
-            Timeline — drag the right edge of any bar to adjust target PO date
+            Timeline — drag a bar to move it, drag the right edge to resize
           </h3>
         </div>
         <div className="flex items-center gap-3 text-[10px] flex-wrap" style={{ fontFamily: fontStack.body }}>
@@ -614,8 +632,10 @@ function GanttChart({ procurements, onUpdate }) {
                     <div key={i} className="absolute top-0 h-full" style={{ left: m.x, width: 1, backgroundColor: "#F1F5F9" }} />
                   ))}
                   <div className="absolute top-0 h-full pointer-events-none" style={{ left: todayX, width: 1.5, backgroundColor: "#DC2626", opacity: 0.5 }} />
-                  <div className="absolute rounded" style={{ left: barX, top: 12, width: barWidth, height: 20, backgroundColor: riskColor, opacity: 0.25, border: `1.5px solid ${riskColor}` }} />
-                  <div onMouseDown={startDrag(p)} className="absolute cursor-ew-resize flex items-center justify-center"
+                  <div onMouseDown={startDragMove(p)} className="absolute rounded cursor-grab active:cursor-grabbing"
+                    style={{ left: barX, top: 12, width: barWidth - 6, height: 20, backgroundColor: riskColor, opacity: 0.25, border: `1.5px solid ${riskColor}` }}
+                    title="Drag to move" />
+                  <div onMouseDown={startDragRight(p)} className="absolute cursor-ew-resize flex items-center justify-center"
                     style={{ left: targetX - 6, top: 8, width: 12, height: 28 }}
                     title={`Target: ${fmtDate(targetDate)} — drag to change`}>
                     <div style={{ width: 4, height: 24, backgroundColor: riskColor, borderRadius: 2, boxShadow: "0 0 0 1px white, 0 1px 3px rgba(0,0,0,0.15)" }} />
