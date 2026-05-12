@@ -25,6 +25,8 @@ import {
   GripVertical,
   CalendarDays,
   ChevronUp,
+  FileText,
+  Loader2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
@@ -1862,6 +1864,8 @@ export default function App() {
   const [sortBy, setSortBy] = useState("estPO");
   const [sortDir, setSortDir] = useState("desc");
   const [showAdd, setShowAdd] = useState(false);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [reportError, setReportError] = useState(null);
 
   const handleAdd = useCallback((newProc) => {
     setProcurements((prev) => [newProc, ...prev]);
@@ -1923,6 +1927,336 @@ export default function App() {
   const setSort = (key) => {
     if (sortBy === key) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
     else { setSortBy(key); setSortDir("desc"); }
+  };
+
+  const buildReportSnapshot = () => {
+    const formal = enriched.filter((p) => p.state !== "pre_pipeline" && p.state !== "not_applicable");
+
+    const catMap = {};
+    formal.forEach((p) => {
+      if (p.state === "cancelled") return;
+      if (!catMap[p.category]) catMap[p.category] = { value: 0, count: 0 };
+      catMap[p.category].value += p.estInitial;
+      catMap[p.category].count += 1;
+    });
+    const topCategories = Object.entries(catMap)
+      .map(([category, v]) => ({ category, value: v.value, count: v.count }))
+      .sort((a, b) => b.value - a.value);
+
+    const atRisk = enriched
+      .filter((p) => p.computed.risk.level === "critical" || p.computed.risk.level === "watch")
+      .filter((p) => p.state !== "pre_pipeline" && p.state !== "not_applicable")
+      .map((p) => ({
+        tender: p.tender,
+        pr: p.pr,
+        lot: p.lot,
+        method: p.method,
+        estInitial: p.estInitial,
+        riskLabel: p.computed.risk.label,
+        riskLevel: p.computed.risk.level,
+        buffer: p.computed.buffer,
+        narrative: p.narrative,
+        targetPO: p.targetPO || "",
+        estPODate: p.computed.estPODate ? toISODate(p.computed.estPODate) : "",
+      }))
+      .sort((a, b) => {
+        if (a.riskLevel !== b.riskLevel) return a.riskLevel === "critical" ? -1 : 1;
+        return (a.buffer ?? 9999) - (b.buffer ?? 9999);
+      });
+
+    const upcomingPOs = enriched
+      .filter((p) => p.state !== "cancelled" && p.state !== "pre_pipeline" && p.state !== "not_applicable")
+      .filter((p) => p.computed.estPODate)
+      .map((p) => ({
+        tender: p.tender,
+        pr: p.pr,
+        lot: p.lot,
+        method: p.method,
+        estInitial: p.estInitial,
+        targetPO: p.targetPO || "",
+        estPODate: toISODate(p.computed.estPODate),
+        daysOut: daysBetween(TODAY, p.computed.estPODate),
+      }))
+      .filter((u) => u.daysOut != null && u.daysOut >= 0 && u.daysOut <= 60)
+      .sort((a, b) => a.daysOut - b.daysOut);
+
+    return {
+      date: toISODate(TODAY),
+      portfolioTotal: totals.portfolioTotal,
+      activeTotal: totals.activeTotal,
+      cancelledTotal: totals.cancelledTotal,
+      countAll: totals.countAll,
+      countActive: totals.countActive,
+      countCancelled: totals.countCancelled,
+      countPipeline: totals.countPipeline,
+      ok: totals.ok,
+      watch: totals.watch,
+      critical: totals.critical,
+      avgVariance: avgVariance.toFixed(1),
+      topCategories,
+      atRisk,
+      upcomingPOs,
+    };
+  };
+
+  const buildReportPdf = async (snapshot, narrative) => {
+    const [{ default: jsPDF }, autoTableMod] = await Promise.all([
+      import("jspdf"),
+      import("jspdf-autotable"),
+    ]);
+    const autoTable = autoTableMod.default || autoTableMod;
+
+    const NAVY = [26, 46, 68];
+    const BLUE = [0, 159, 218];
+    const SLATE = [71, 85, 105];
+    const SLATE_LIGHT = [148, 163, 184];
+    const CRITICAL = [220, 38, 38];
+    const WATCH = [217, 119, 6];
+
+    const doc = new jsPDF({ unit: "pt", format: "a4" });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 40;
+    const usd = (n) => "$" + Number(n || 0).toLocaleString("en-US");
+
+    doc.setFillColor(...NAVY);
+    doc.rect(0, 0, pageWidth, 92, "F");
+    doc.setFillColor(...BLUE);
+    doc.rect(0, 92, pageWidth, 3, "F");
+
+    doc.setTextColor(...BLUE);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    doc.text("FAO HAITI · COUNTRY OFFICE · OSRO/HAI/061/CHA", margin, 30);
+
+    doc.setTextColor(255);
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("Procurement Pipeline — Management Report", margin, 58);
+
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(203, 213, 225);
+    doc.text(`Snapshot as of ${snapshot.date} · PM: Costantino, Claudio (FLHAI)`, margin, 78);
+
+    let y = 125;
+
+    doc.setTextColor(...NAVY);
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "bold");
+    doc.text("Portfolio snapshot", margin, y);
+    y += 8;
+
+    autoTable(doc, {
+      startY: y,
+      head: [["Metric", "Value"]],
+      body: [
+        ["Portfolio total (PR estimate)", usd(snapshot.portfolioTotal)],
+        ["Active value (excludes cancelled)", usd(snapshot.activeTotal)],
+        ["Cancelled value", usd(snapshot.cancelledTotal)],
+        ["Active procurements", String(snapshot.countActive)],
+        ["Cancelled procurements", String(snapshot.countCancelled)],
+        ["Pre-pipeline / not applicable", String(snapshot.countPipeline)],
+        ["On track", String(snapshot.ok)],
+        ["Watch", String(snapshot.watch)],
+        ["Critical", String(snapshot.critical)],
+        ["Average PR→PO variance", `${snapshot.avgVariance}%`],
+      ],
+      theme: "grid",
+      headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", fontSize: 10 },
+      bodyStyles: { fontSize: 10, textColor: [15, 23, 42] },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+      columnStyles: { 0: { cellWidth: 280 }, 1: { halign: "right" } },
+      margin: { left: margin, right: margin },
+    });
+    y = doc.lastAutoTable.finalY + 22;
+
+    if (y > pageHeight - 200) {
+      doc.addPage();
+      y = 50;
+    }
+
+    doc.setTextColor(...NAVY);
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "bold");
+    doc.text("Executive summary", margin, y);
+    y += 14;
+
+    doc.setTextColor(15, 23, 42);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    const wrapped = doc.splitTextToSize(narrative, pageWidth - margin * 2);
+    const lineHeight = 13;
+    for (const line of wrapped) {
+      if (y > pageHeight - 60) {
+        doc.addPage();
+        y = 50;
+      }
+      doc.text(line, margin, y);
+      y += lineHeight;
+    }
+    y += 14;
+
+    if (y > pageHeight - 160) {
+      doc.addPage();
+      y = 50;
+    }
+    doc.setTextColor(...NAVY);
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "bold");
+    doc.text("Pipeline value by category", margin, y);
+    y += 8;
+    autoTable(doc, {
+      startY: y,
+      head: [["Category", "# procurements", "Value (USD)"]],
+      body: snapshot.topCategories.map((c) => [c.category, c.count, usd(c.value)]),
+      theme: "grid",
+      headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", fontSize: 10 },
+      bodyStyles: { fontSize: 9, textColor: [15, 23, 42] },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+      columnStyles: { 1: { halign: "center", cellWidth: 110 }, 2: { halign: "right", cellWidth: 130 } },
+      margin: { left: margin, right: margin },
+    });
+    y = doc.lastAutoTable.finalY + 22;
+
+    if (y > pageHeight - 160) {
+      doc.addPage();
+      y = 50;
+    }
+    doc.setTextColor(...NAVY);
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "bold");
+    doc.text("Procurements requiring attention", margin, y);
+    y += 8;
+    if (snapshot.atRisk.length === 0) {
+      doc.setTextColor(...SLATE);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "italic");
+      doc.text("No procurements are at watch or critical risk.", margin, y + 12);
+      y += 30;
+    } else {
+      autoTable(doc, {
+        startY: y,
+        head: [["Tender", "PR / Lot", "Method", "Value", "Risk", "Current status"]],
+        body: snapshot.atRisk.map((r) => [
+          r.tender,
+          r.lot ? `${r.pr} – ${r.lot}` : r.pr,
+          r.method,
+          usd(r.estInitial),
+          r.riskLabel,
+          r.narrative || "—",
+        ]),
+        theme: "grid",
+        headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", fontSize: 9 },
+        bodyStyles: { fontSize: 8, textColor: [15, 23, 42], cellPadding: 4 },
+        alternateRowStyles: { fillColor: [241, 245, 249] },
+        columnStyles: {
+          0: { cellWidth: 110 },
+          1: { cellWidth: 70 },
+          2: { cellWidth: 40, halign: "center" },
+          3: { cellWidth: 60, halign: "right" },
+          4: { cellWidth: 60 },
+          5: { cellWidth: "auto" },
+        },
+        didParseCell: (data) => {
+          if (data.section === "body" && data.column.index === 4) {
+            const row = snapshot.atRisk[data.row.index];
+            if (row?.riskLevel === "critical") {
+              data.cell.styles.textColor = CRITICAL;
+              data.cell.styles.fontStyle = "bold";
+            } else if (row?.riskLevel === "watch") {
+              data.cell.styles.textColor = WATCH;
+              data.cell.styles.fontStyle = "bold";
+            }
+          }
+        },
+        margin: { left: margin, right: margin },
+      });
+      y = doc.lastAutoTable.finalY + 22;
+    }
+
+    if (y > pageHeight - 160) {
+      doc.addPage();
+      y = 50;
+    }
+    doc.setTextColor(...NAVY);
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "bold");
+    doc.text("Upcoming PO milestones (next 60 days)", margin, y);
+    y += 8;
+    if (snapshot.upcomingPOs.length === 0) {
+      doc.setTextColor(...SLATE);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "italic");
+      doc.text("No procurements are expected to close in the next 60 days.", margin, y + 12);
+    } else {
+      autoTable(doc, {
+        startY: y,
+        head: [["Tender", "PR / Lot", "Method", "Value", "Target PO", "Est. PO", "Days out"]],
+        body: snapshot.upcomingPOs.map((u) => [
+          u.tender,
+          u.lot ? `${u.pr} – ${u.lot}` : u.pr,
+          u.method,
+          usd(u.estInitial),
+          u.targetPO || "—",
+          u.estPODate || "—",
+          `${u.daysOut}d`,
+        ]),
+        theme: "grid",
+        headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", fontSize: 9 },
+        bodyStyles: { fontSize: 8, textColor: [15, 23, 42], cellPadding: 4 },
+        alternateRowStyles: { fillColor: [241, 245, 249] },
+        columnStyles: {
+          0: { cellWidth: "auto" },
+          2: { halign: "center", cellWidth: 40 },
+          3: { halign: "right", cellWidth: 70 },
+          4: { cellWidth: 65 },
+          5: { cellWidth: 65 },
+          6: { halign: "right", cellWidth: 50 },
+        },
+        margin: { left: margin, right: margin },
+      });
+    }
+
+    const pageCount = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(...SLATE_LIGHT);
+      doc.setFont("helvetica", "normal");
+      doc.text(
+        `Generated ${snapshot.date} · FAO Haiti Procurement Pipeline Tracker · Page ${i} of ${pageCount}`,
+        margin,
+        pageHeight - 20,
+      );
+    }
+
+    return doc;
+  };
+
+  const generateReport = async () => {
+    if (isGeneratingReport) return;
+    setReportError(null);
+    setIsGeneratingReport(true);
+    try {
+      const snapshot = buildReportSnapshot();
+      const res = await fetch("/api/generate-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(snapshot),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Report API returned ${res.status}`);
+      }
+      const { narrative } = await res.json();
+      const doc = await buildReportPdf(snapshot, narrative);
+      doc.save(`FAO-Haiti-Management-Report-${snapshot.date}.pdf`);
+    } catch (err) {
+      setReportError(err.message || "Could not generate report");
+    } finally {
+      setIsGeneratingReport(false);
+    }
   };
 
   const exportToExcel = () => {
@@ -2075,6 +2409,43 @@ export default function App() {
         >
           <Download size={14} /> Export Excel
         </button>
+        <button
+          onClick={generateReport}
+          disabled={isGeneratingReport}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium text-white transition"
+          style={{
+            backgroundColor: isGeneratingReport ? "#94A3B8" : FAO_NAVY,
+            fontFamily: fontStack.body,
+            border: `1px solid ${isGeneratingReport ? "#94A3B8" : FAO_NAVY}`,
+            cursor: isGeneratingReport ? "wait" : "pointer",
+          }}
+          title="Generate a PDF management report with an AI-written executive summary"
+        >
+          {isGeneratingReport ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+          {isGeneratingReport ? "Generating…" : "Management report"}
+        </button>
+        {reportError && (
+          <div
+            className="text-xs px-3 py-1.5 rounded-md"
+            style={{
+              backgroundColor: "#FEE2E2",
+              color: "#991B1B",
+              fontFamily: fontStack.body,
+              border: "1px solid #FCA5A5",
+              maxWidth: 360,
+            }}
+            title={reportError}
+          >
+            Report failed: {reportError.length > 80 ? reportError.slice(0, 80) + "…" : reportError}
+            <button
+              onClick={() => setReportError(null)}
+              className="ml-2 underline"
+              style={{ color: "#991B1B" }}
+            >
+              dismiss
+            </button>
+          </div>
+        )}
         {tab === "pipeline" && (
           <div className="ml-auto flex items-center gap-2 flex-wrap">
             <Filter size={14} style={{ color: "#64748B" }} />
