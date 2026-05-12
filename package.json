@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "jspdf": "^2.5.2",
-    "jspdf-autotable": "^3.8.4",
+    "jspdf-autotable": "^5.0.7",
     "lucide-react": "^1.14.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",

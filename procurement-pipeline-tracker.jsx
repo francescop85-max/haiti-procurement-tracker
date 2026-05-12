@@ -2000,11 +2000,35 @@ export default function App() {
   };
 
   const buildReportPdf = async (snapshot, narrative) => {
-    const [{ default: jsPDF }, autoTableMod] = await Promise.all([
+    const [{ default: jsPDF }, autoTableMod, regularUrl, boldUrl] = await Promise.all([
       import("jspdf"),
       import("jspdf-autotable"),
+      import("./src/fonts/IBMPlexSans-Regular.ttf?url").then((m) => m.default),
+      import("./src/fonts/IBMPlexSans-Bold.ttf?url").then((m) => m.default),
     ]);
     const autoTable = autoTableMod.default || autoTableMod;
+
+    // Helper: fetch a TTF and return a base64 binary string for jsPDF VFS
+    const fetchAsBase64 = async (url) => {
+      const buf = await fetch(url).then((r) => r.arrayBuffer());
+      const u8 = new Uint8Array(buf);
+      let bin = "";
+      const CHUNK = 0x8000;
+      for (let i = 0; i < u8.length; i += CHUNK) {
+        bin += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
+      }
+      return btoa(bin);
+    };
+
+    let FONT = "helvetica";
+    try {
+      const [regB64, boldB64] = await Promise.all([fetchAsBase64(regularUrl), fetchAsBase64(boldUrl)]);
+      // Will be created after the doc; defer call by stashing on outer scope
+      var _plexRegB64 = regB64;
+      var _plexBoldB64 = boldB64;
+    } catch (e) {
+      console.warn("IBM Plex Sans failed to load, falling back to Helvetica:", e);
+    }
 
     const NAVY = [26, 46, 68];
     const BLUE = [0, 159, 218];
@@ -2012,13 +2036,40 @@ export default function App() {
     const SLATE_LIGHT = [148, 163, 184];
     const CRITICAL = [220, 38, 38];
     const WATCH = [217, 119, 6];
+    const OK_GREEN = [22, 163, 74];
+    const TEAL = [15, 118, 110];
+    const VIOLET = [124, 58, 237];
+    const ROSE = [225, 29, 72];
+    const AMBER = [217, 119, 6];
+    const PALETTE = [BLUE, TEAL, VIOLET, ROSE, AMBER, [101, 163, 13]];
 
     const doc = new jsPDF({ unit: "pt", format: "a4" });
+
+    // Register IBM Plex Sans if we managed to load it
+    if (_plexRegB64 && _plexBoldB64) {
+      try {
+        doc.addFileToVFS("IBMPlexSans-Regular.ttf", _plexRegB64);
+        doc.addFont("IBMPlexSans-Regular.ttf", "IBMPlexSans", "normal");
+        doc.addFileToVFS("IBMPlexSans-Bold.ttf", _plexBoldB64);
+        doc.addFont("IBMPlexSans-Bold.ttf", "IBMPlexSans", "bold");
+        FONT = "IBMPlexSans";
+      } catch (e) {
+        console.warn("Failed to register IBM Plex Sans in PDF:", e);
+      }
+    }
+
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
     const margin = 40;
     const usd = (n) => "$" + Number(n || 0).toLocaleString("en-US");
+    const usdShort = (n) => {
+      const v = Number(n || 0);
+      if (Math.abs(v) >= 1e6) return "$" + (v / 1e6).toFixed(2) + "M";
+      if (Math.abs(v) >= 1e3) return "$" + (v / 1e3).toFixed(1) + "K";
+      return "$" + v.toFixed(0);
+    };
 
+    // ── Header band ──
     doc.setFillColor(...NAVY);
     doc.rect(0, 0, pageWidth, 92, "F");
     doc.setFillColor(...BLUE);
@@ -2026,67 +2077,196 @@ export default function App() {
 
     doc.setTextColor(...BLUE);
     doc.setFontSize(8);
-    doc.setFont("helvetica", "bold");
+    doc.setFont(FONT, "bold");
     doc.text("FAO HAITI · COUNTRY OFFICE · OSRO/HAI/061/CHA", margin, 30);
 
     doc.setTextColor(255);
     doc.setFontSize(18);
-    doc.setFont("helvetica", "bold");
+    doc.setFont(FONT, "bold");
     doc.text("Procurement Pipeline — Management Report", margin, 58);
 
     doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
+    doc.setFont(FONT, "normal");
     doc.setTextColor(203, 213, 225);
-    doc.text(`Snapshot as of ${snapshot.date} · PM: Costantino, Claudio (FLHAI)`, margin, 78);
+    doc.text(`Snapshot as of ${snapshot.date}`, margin, 78);
 
-    let y = 125;
+    let y = 120;
 
-    doc.setTextColor(...NAVY);
-    doc.setFontSize(12);
-    doc.setFont("helvetica", "bold");
-    doc.text("Portfolio snapshot", margin, y);
-    y += 8;
+    // ── KPI cards (4 across) ──
+    const sectionTitle = (text, atY, atX = margin) => {
+      doc.setFillColor(...BLUE);
+      doc.rect(atX, atY - 4, 3, 12, "F");
+      doc.setTextColor(...NAVY);
+      doc.setFontSize(12);
+      doc.setFont(FONT, "bold");
+      doc.text(text, atX + 10, atY + 5);
+    };
 
-    autoTable(doc, {
-      startY: y,
-      head: [["Metric", "Value"]],
-      body: [
-        ["Portfolio total (PR estimate)", usd(snapshot.portfolioTotal)],
-        ["Active value (excludes cancelled)", usd(snapshot.activeTotal)],
-        ["Cancelled value", usd(snapshot.cancelledTotal)],
-        ["Active procurements", String(snapshot.countActive)],
-        ["Cancelled procurements", String(snapshot.countCancelled)],
-        ["Pre-pipeline / not applicable", String(snapshot.countPipeline)],
-        ["On track", String(snapshot.ok)],
-        ["Watch", String(snapshot.watch)],
-        ["Critical", String(snapshot.critical)],
-        ["Average PR→PO variance", `${snapshot.avgVariance}%`],
-      ],
-      theme: "grid",
-      headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", fontSize: 10 },
-      bodyStyles: { fontSize: 10, textColor: [15, 23, 42] },
-      alternateRowStyles: { fillColor: [241, 245, 249] },
-      columnStyles: { 0: { cellWidth: 280 }, 1: { halign: "right" } },
-      margin: { left: margin, right: margin },
+    sectionTitle("Portfolio at a glance", y);
+    y += 18;
+
+    const cardWidth = (pageWidth - margin * 2 - 12 * 3) / 4;
+    const cardHeight = 64;
+    const cards = [
+      { label: "Portfolio total", value: usdShort(snapshot.portfolioTotal), sub: `${snapshot.countActive + snapshot.countCancelled + snapshot.countPipeline} solicitations`, accent: NAVY },
+      { label: "Active value", value: usdShort(snapshot.activeTotal), sub: `${snapshot.countActive} active`, accent: BLUE },
+      { label: "On track", value: String(snapshot.ok), sub: `Watch ${snapshot.watch} · Critical ${snapshot.critical}`, accent: OK_GREEN },
+      { label: "Avg PR-to-PO variance", value: `${snapshot.avgVariance}%`, sub: "Across issued POs", accent: TEAL },
+    ];
+    cards.forEach((c, i) => {
+      const x = margin + i * (cardWidth + 12);
+      doc.setFillColor(248, 250, 252);
+      doc.roundedRect(x, y, cardWidth, cardHeight, 4, 4, "F");
+      doc.setFillColor(...c.accent);
+      doc.rect(x, y, 3, cardHeight, "F");
+      doc.setTextColor(...SLATE);
+      doc.setFontSize(7.5);
+      doc.setFont(FONT, "bold");
+      doc.text(c.label.toUpperCase(), x + 10, y + 14);
+      doc.setTextColor(...NAVY);
+      doc.setFontSize(15);
+      doc.setFont(FONT, "bold");
+      doc.text(c.value, x + 10, y + 36);
+      doc.setTextColor(...SLATE_LIGHT);
+      doc.setFontSize(8);
+      doc.setFont(FONT, "normal");
+      doc.text(c.sub, x + 10, y + 52);
     });
-    y = doc.lastAutoTable.finalY + 22;
+    y += cardHeight + 24;
 
-    if (y > pageHeight - 200) {
-      doc.addPage();
-      y = 50;
+    // ── Two-column row: Risk donut + Top categories bar chart ──
+    const halfW = (pageWidth - margin * 2 - 18) / 2;
+    const chartTop = y;
+    const chartHeight = 170;
+
+    // Left card: Risk distribution donut
+    doc.setFillColor(255);
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(margin, chartTop, halfW, chartHeight, 4, 4, "FD");
+    sectionTitle("Risk distribution", chartTop + 12);
+
+    const totalRisk = snapshot.ok + snapshot.watch + snapshot.critical;
+    if (totalRisk > 0) {
+      const cx = margin + 70;
+      const cy = chartTop + 100;
+      const rOuter = 38;
+      const rInner = 22;
+      const segs = [
+        { v: snapshot.ok, color: OK_GREEN },
+        { v: snapshot.watch, color: WATCH },
+        { v: snapshot.critical, color: CRITICAL },
+      ].filter((s) => s.v > 0);
+      let a0 = -Math.PI / 2;
+      segs.forEach((s) => {
+        const a1 = a0 + (s.v / totalRisk) * Math.PI * 2;
+        // approximate arc as polygon
+        const steps = Math.max(8, Math.ceil(((a1 - a0) / (Math.PI * 2)) * 64));
+        doc.setFillColor(...s.color);
+        const poly = [];
+        for (let k = 0; k <= steps; k++) {
+          const t = a0 + (a1 - a0) * (k / steps);
+          poly.push([cx + Math.cos(t) * rOuter, cy + Math.sin(t) * rOuter]);
+        }
+        for (let k = steps; k >= 0; k--) {
+          const t = a0 + (a1 - a0) * (k / steps);
+          poly.push([cx + Math.cos(t) * rInner, cy + Math.sin(t) * rInner]);
+        }
+        const pts = poly.map(([px, py], idx) => (idx === 0 ? [px, py, "m"] : [px, py, "l"]));
+        doc.lines(
+          pts.slice(1).map(([px, py], idx) => [px - pts[idx][0], py - pts[idx][1]]),
+          pts[0][0], pts[0][1], [1, 1], "F", true,
+        );
+        a0 = a1;
+      });
+      doc.setTextColor(...NAVY);
+      doc.setFontSize(20);
+      doc.setFont(FONT, "bold");
+      doc.text(String(totalRisk), cx, cy + 4, { align: "center" });
+      doc.setTextColor(...SLATE);
+      doc.setFontSize(7);
+      doc.setFont(FONT, "normal");
+      doc.text("TOTAL", cx, cy + 16, { align: "center" });
+
+      // Legend
+      const lx = margin + 140;
+      let ly = chartTop + 60;
+      const legendItems = [
+        { v: snapshot.ok, color: OK_GREEN, label: "On track" },
+        { v: snapshot.watch, color: WATCH, label: "Watch" },
+        { v: snapshot.critical, color: CRITICAL, label: "Critical" },
+      ];
+      legendItems.forEach((it) => {
+        doc.setFillColor(...it.color);
+        doc.rect(lx, ly - 7, 9, 9, "F");
+        doc.setTextColor(...NAVY);
+        doc.setFontSize(9);
+        doc.setFont(FONT, "bold");
+        doc.text(it.label, lx + 14, ly);
+        doc.setTextColor(...SLATE);
+        doc.setFont(FONT, "normal");
+        const pct = totalRisk > 0 ? Math.round((it.v / totalRisk) * 100) : 0;
+        doc.text(`${it.v}  ·  ${pct}%`, lx + 14, ly + 12);
+        ly += 28;
+      });
+    } else {
+      doc.setTextColor(...SLATE);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "italic");
+      doc.text("No active risk data", margin + halfW / 2, chartTop + chartHeight / 2, { align: "center" });
     }
 
-    doc.setTextColor(...NAVY);
-    doc.setFontSize(12);
-    doc.setFont("helvetica", "bold");
-    doc.text("Executive summary", margin, y);
-    y += 14;
+    // Right card: Top categories horizontal bar chart
+    const rightX = margin + halfW + 18;
+    doc.setFillColor(255);
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(rightX, chartTop, halfW, chartHeight, 4, 4, "FD");
+    sectionTitle("Top categories by value", chartTop + 12, rightX);
+
+    const cats = (snapshot.topCategories || []).slice(0, 6);
+    if (cats.length > 0) {
+      const maxV = Math.max(...cats.map((c) => c.value));
+      const barAreaX = rightX + 110;
+      const barAreaW = halfW - 110 - 80;
+      const startY = chartTop + 36;
+      const rowH = (chartHeight - 50) / cats.length;
+      cats.forEach((c, i) => {
+        const by = startY + i * rowH + 4;
+        const bw = maxV > 0 ? (c.value / maxV) * barAreaW : 0;
+        // label
+        doc.setTextColor(...NAVY);
+        doc.setFontSize(8);
+        doc.setFont(FONT, "bold");
+        const labelMax = 95;
+        const truncated = c.category.length > 22 ? c.category.slice(0, 20) + "…" : c.category;
+        doc.text(truncated, rightX + 10, by + 8);
+        // bar
+        doc.setFillColor(...PALETTE[i % PALETTE.length]);
+        doc.roundedRect(barAreaX, by, Math.max(bw, 1), 12, 1.5, 1.5, "F");
+        // value
+        doc.setTextColor(...SLATE);
+        doc.setFontSize(8);
+        doc.setFont(FONT, "normal");
+        doc.text(usdShort(c.value), barAreaX + Math.max(bw, 1) + 6, by + 9);
+      });
+    } else {
+      doc.setTextColor(...SLATE);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "italic");
+      doc.text("No data", rightX + halfW / 2, chartTop + chartHeight / 2, { align: "center" });
+    }
+
+    y = chartTop + chartHeight + 22;
+
+    // ── Executive summary ──
+    if (y > pageHeight - 200) { doc.addPage(); y = 50; }
+    sectionTitle("Executive summary", y);
+    y += 22;
 
     doc.setTextColor(15, 23, 42);
     doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
+    doc.setFont(FONT, "normal");
     const wrapped = doc.splitTextToSize(narrative, pageWidth - margin * 2);
-    const lineHeight = 13;
+    const lineHeight = 14;
     for (const line of wrapped) {
       if (y > pageHeight - 60) {
         doc.addPage();
@@ -2095,39 +2275,14 @@ export default function App() {
       doc.text(line, margin, y);
       y += lineHeight;
     }
-    y += 14;
+    y += 18;
 
     if (y > pageHeight - 160) {
       doc.addPage();
       y = 50;
     }
-    doc.setTextColor(...NAVY);
-    doc.setFontSize(12);
-    doc.setFont("helvetica", "bold");
-    doc.text("Pipeline value by category", margin, y);
-    y += 8;
-    autoTable(doc, {
-      startY: y,
-      head: [["Category", "# procurements", "Value (USD)"]],
-      body: snapshot.topCategories.map((c) => [c.category, c.count, usd(c.value)]),
-      theme: "grid",
-      headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", fontSize: 10 },
-      bodyStyles: { fontSize: 9, textColor: [15, 23, 42] },
-      alternateRowStyles: { fillColor: [241, 245, 249] },
-      columnStyles: { 1: { halign: "center", cellWidth: 110 }, 2: { halign: "right", cellWidth: 130 } },
-      margin: { left: margin, right: margin },
-    });
-    y = doc.lastAutoTable.finalY + 22;
-
-    if (y > pageHeight - 160) {
-      doc.addPage();
-      y = 50;
-    }
-    doc.setTextColor(...NAVY);
-    doc.setFontSize(12);
-    doc.setFont("helvetica", "bold");
-    doc.text("Procurements requiring attention", margin, y);
-    y += 8;
+    sectionTitle("Procurements requiring attention", y);
+    y += 18;
     if (snapshot.atRisk.length === 0) {
       doc.setTextColor(...SLATE);
       doc.setFontSize(10);
@@ -2147,8 +2302,8 @@ export default function App() {
           r.narrative || "—",
         ]),
         theme: "grid",
-        headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", fontSize: 9 },
-        bodyStyles: { fontSize: 8, textColor: [15, 23, 42], cellPadding: 4 },
+        headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", fontSize: 9, font: FONT },
+        bodyStyles: { fontSize: 8, textColor: [15, 23, 42], cellPadding: 4, font: FONT },
         alternateRowStyles: { fillColor: [241, 245, 249] },
         columnStyles: {
           0: { cellWidth: 110 },
@@ -2179,11 +2334,8 @@ export default function App() {
       doc.addPage();
       y = 50;
     }
-    doc.setTextColor(...NAVY);
-    doc.setFontSize(12);
-    doc.setFont("helvetica", "bold");
-    doc.text("Upcoming PO milestones (next 60 days)", margin, y);
-    y += 8;
+    sectionTitle("Upcoming PO milestones (next 60 days)", y);
+    y += 18;
     if (snapshot.upcomingPOs.length === 0) {
       doc.setTextColor(...SLATE);
       doc.setFontSize(10);
@@ -2203,8 +2355,8 @@ export default function App() {
           `${u.daysOut}d`,
         ]),
         theme: "grid",
-        headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", fontSize: 9 },
-        bodyStyles: { fontSize: 8, textColor: [15, 23, 42], cellPadding: 4 },
+        headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", fontSize: 9, font: FONT },
+        bodyStyles: { fontSize: 8, textColor: [15, 23, 42], cellPadding: 4, font: FONT },
         alternateRowStyles: { fillColor: [241, 245, 249] },
         columnStyles: {
           0: { cellWidth: "auto" },
@@ -2223,7 +2375,7 @@ export default function App() {
       doc.setPage(i);
       doc.setFontSize(8);
       doc.setTextColor(...SLATE_LIGHT);
-      doc.setFont("helvetica", "normal");
+      doc.setFont(FONT, "normal");
       doc.text(
         `Generated ${snapshot.date} · FAO Haiti Procurement Pipeline Tracker · Page ${i} of ${pageCount}`,
         margin,
