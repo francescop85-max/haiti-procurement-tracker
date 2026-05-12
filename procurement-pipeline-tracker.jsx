@@ -1059,7 +1059,8 @@ function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, s
 
   const SortableHeader = ({ keyName, label, align = "left" }) => (
     <th onClick={() => setSort(keyName)}
-      className={`px-3 py-3 text-[10px] uppercase tracking-wider font-semibold cursor-pointer hover:bg-white hover:bg-opacity-10 transition text-${align}`}>
+      className={`px-3 py-3 text-[10px] uppercase tracking-wider font-semibold cursor-pointer select-none transition text-${align}`}
+      style={{ color: "white", backgroundColor: sortBy === keyName ? "#243B57" : undefined }}>
       {label} {sortIndicator(keyName)}
     </th>
   );
@@ -1067,19 +1068,21 @@ function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, s
   return (
     <div className="rounded-xl border overflow-hidden bg-white" style={{ borderColor: "#E2E8F0" }}>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm" style={{ fontFamily: fontStack.body, minWidth: "1560px" }}>
+        <table className="w-full text-sm" style={{ fontFamily: fontStack.body, minWidth: "1700px" }}>
           <thead>
             <tr style={{ backgroundColor: FAO_NAVY, color: "white" }}>
               <th className="w-8 px-3 py-3"></th>
               <SortableHeader keyName="pr" label="PR / Lot" />
-              <th className="text-left px-3 py-3 text-[10px] uppercase tracking-wider font-semibold">Tender</th>
+              <th className="text-left px-3 py-3 text-[10px] uppercase tracking-wider font-semibold" style={{ color: "white" }}>Tender</th>
               <SortableHeader keyName="category" label="Category" />
               <SortableHeader keyName="method" label="Method" align="center" />
               <SortableHeader keyName="estInitial" label="Est. PR" align="right" />
               <SortableHeader keyName="estPO" label="Est. PO" align="right" />
-              <th className="text-center px-3 py-3 text-[10px] uppercase tracking-wider font-semibold">Δ</th>
+              <th className="text-center px-3 py-3 text-[10px] uppercase tracking-wider font-semibold select-none" style={{ color: "white" }}>Δ</th>
               <SortableHeader keyName="currentStage" label="Current stage" />
-              <th className="text-left px-3 py-3 text-[10px] uppercase tracking-wider font-semibold" style={{ minWidth: 250 }}>
+              <th className="text-center px-3 py-3 text-[10px] uppercase tracking-wider font-semibold select-none" style={{ color: "white" }}>Bids rec.</th>
+              <th className="text-center px-3 py-3 text-[10px] uppercase tracking-wider font-semibold select-none" style={{ color: "white" }}>Responsive</th>
+              <th className="text-left px-3 py-3 text-[10px] uppercase tracking-wider font-semibold select-none" style={{ minWidth: 250, color: "white" }}>
                 Status narrative
               </th>
               <SortableHeader keyName="targetPO" label="Target PO" align="center" />
@@ -1127,16 +1130,24 @@ function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, s
                         <StatusDot status={p.state === "on_hold" || p.state === "cancelled" ? "blocked" : currentStage?.status || "in_progress"} />
                         {currentStage?.name || "—"}
                       </div>
-                      {p.nBids != null && (
-                        <div className="text-xs mt-0.5" style={{ color: p.nBids < 3 ? "#B45309" : "#64748B", fontFamily: fontStack.mono }}>
-                          {p.nBids} bid{p.nBids !== 1 ? "s" : ""}{p.nBids < 3 && " ⚠"}
-                        </div>
-                      )}
                       {p.comments && p.comments.length > 0 && (
                         <div className="text-[10px] mt-0.5 inline-flex items-center gap-1" style={{ color: "#64748B", fontFamily: fontStack.body }}>
                           <MessageSquare size={9} /> {p.comments.length}
                         </div>
                       )}
+                    </td>
+                    <td className="px-3 py-3 text-center text-sm tabular-nums" style={{ color: p.nBids != null && p.nBids < 3 ? "#B45309" : "#334155", fontFamily: fontStack.mono }}>
+                      {p.nBids != null ? <>{p.nBids}{p.nBids < 3 && " ⚠"}</> : "—"}
+                    </td>
+                    <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="number" min="0"
+                        value={p.nResponsive ?? ""}
+                        placeholder="—"
+                        onChange={(e) => updateProcurement({ ...p, nResponsive: e.target.value === "" ? null : Number(e.target.value) })}
+                        className="w-14 text-center px-1 py-0.5 rounded border text-sm tabular-nums bg-transparent"
+                        style={{ borderColor: "#CBD5E1", fontFamily: fontStack.mono, color: "#334155", outline: "none" }}
+                      />
                     </td>
                     <td className="px-3 py-2" style={{ verticalAlign: "top", paddingTop: 10 }}>
                       <EditableNarrative
@@ -1153,7 +1164,7 @@ function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, s
                   </tr>
                   {isOpen && (
                     <tr>
-                      <td colSpan={13} className="p-0">
+                      <td colSpan={15} className="p-0">
                         <div className="border-t p-6 space-y-6" style={{ backgroundColor: "#F8FAFC", borderColor: "#E2E8F0" }}>
                           <StageEditor procurement={p} onUpdate={updateProcurement} />
                           <div className="border-t pt-6" style={{ borderColor: "#E2E8F0" }}>
