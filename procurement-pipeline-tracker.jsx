@@ -363,7 +363,7 @@ function StageEditor({ procurement, onUpdate }) {
   };
   const resetDefaults = () => {
     const fresh = buildStages(procurement.method, procurement.estInitial);
-    const merged = fresh.map((f, i) => ({ ...f, status: procurement.stages[i]?.status || "not_started" }));
+    const merged = fresh.map((f) => { const ex = procurement.stages.find((s) => s.key === f.key); return { ...f, status: ex?.status || "not_started" }; });
     onUpdate({ ...procurement, stages: merged });
   };
   const [addingAfter, setAddingAfter] = useState(null);
@@ -693,7 +693,7 @@ function computeTimeline(p) {
     }
   }
 
-  return { stages: out, timelineStart: out[0].stageStart, timelineEnd: out[out.length - 1].stageEnd };
+  return { stages: out, timelineStart: out.length ? out[0].stageStart : null, timelineEnd: out.length ? out[out.length - 1].stageEnd : null };
 }
 
 function GanttChart({ procurements, onUpdate }) {
@@ -886,7 +886,7 @@ const LegendDot = ({ color, label }) => (
 function AnalyticsTab({ enriched }) {
   const byCategory = useMemo(() => {
     const map = {};
-    enriched.forEach((p) => { if (p.state !== "cancelled") map[p.category] = (map[p.category] || 0) + p.estPO; });
+    enriched.forEach((p) => { if (p.state !== "cancelled") map[p.category] = (map[p.category] || 0) + p.estInitial; });
     return Object.entries(map).map(([category, value]) => ({ category, value })).sort((a, b) => b.value - a.value);
   }, [enriched]);
 
@@ -912,7 +912,7 @@ function AnalyticsTab({ enriched }) {
 
   const byMethod = useMemo(() => {
     const map = {};
-    enriched.forEach((p) => { if (p.state !== "cancelled") map[p.method] = (map[p.method] || 0) + p.estPO; });
+    enriched.forEach((p) => { if (p.state !== "cancelled") map[p.method] = (map[p.method] || 0) + p.estInitial; });
     return Object.entries(map).map(([name, value]) => ({ name, value, color: name === "RFP" ? "#5B21B6" : "#1E3A8A" }));
   }, [enriched]);
 
@@ -1801,7 +1801,8 @@ export default function App() {
     </button>
   );
 
-  const avgVariance = enriched.length ? (enriched.reduce((s, p) => s + p.computed.variance, 0) / enriched.length) * 100 : 0;
+  const withPO = enriched.filter((p) => p.estPO > 0);
+  const avgVariance = withPO.length ? (withPO.reduce((s, p) => s + p.computed.variance, 0) / withPO.length) * 100 : 0;
 
   if (!authed) return <LoginGate onAuth={() => setAuthed(true)} />;
 
