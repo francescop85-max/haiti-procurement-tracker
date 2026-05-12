@@ -364,6 +364,7 @@ function StageEditor({ procurement, onUpdate }) {
     onUpdate({ ...procurement, stages: merged });
   };
   const computed = computeProcurement(procurement);
+  const { stages: timedStages } = computeTimeline(procurement);
 
   return (
     <div className="grid grid-cols-12 gap-6">
@@ -383,40 +384,51 @@ function StageEditor({ procurement, onUpdate }) {
                 <th className="text-left px-3 py-2 font-semibold">#</th>
                 <th className="text-left px-3 py-2 font-semibold">Stage</th>
                 <th className="text-center px-3 py-2 font-semibold">Status</th>
-                <th className="text-right px-3 py-2 font-semibold">Planned days</th>
+                <th className="text-right px-3 py-2 font-semibold">Start</th>
+                <th className="text-right px-3 py-2 font-semibold">End</th>
+                <th className="text-right px-3 py-2 font-semibold">Days</th>
               </tr>
             </thead>
             <tbody>
-              {procurement.stages.map((s, i) => (
-                <tr key={s.key} className="border-t" style={{ borderColor: "#F1F5F9", backgroundColor: s.status === "in_progress" ? "#EFF6FF" : "white" }}>
-                  <td className="px-3 py-2 text-xs" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>{String(i + 1).padStart(2, "0")}</td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <StatusDot status={s.status} />
-                      <span style={{ color: "#0F172A" }}>{s.name}</span>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-center">
-                    <select value={s.status} onChange={(e) => setStageStatus(i, e.target.value)}
-                      className="text-xs px-2 py-1 rounded border bg-white"
-                      style={{ borderColor: "#CBD5E1", color: "#334155", fontFamily: fontStack.body }}>
-                      <option value="not_started">Not started</option>
-                      <option value="in_progress">In progress</option>
-                      <option value="complete">Complete</option>
-                      <option value="blocked">Blocked</option>
-                      <option value="skipped">Skipped</option>
-                    </select>
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <input type="number" min="0" value={s.plannedDays}
-                      onChange={(e) => updateStage(i, { plannedDays: Number(e.target.value) })}
-                      disabled={s.status === "complete" || s.status === "skipped"}
-                      className="w-16 text-right px-2 py-1 rounded border text-xs disabled:bg-slate-100 disabled:text-slate-400"
-                      style={{ borderColor: "#CBD5E1", fontFamily: fontStack.mono, color: "#0F172A" }} />
-                    <span className="ml-1 text-xs" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>d</span>
-                  </td>
-                </tr>
-              ))}
+              {procurement.stages.map((s, i) => {
+                const ts = timedStages[i];
+                return (
+                  <tr key={s.key} className="border-t" style={{ borderColor: "#F1F5F9", backgroundColor: s.status === "in_progress" ? "#EFF6FF" : "white" }}>
+                    <td className="px-3 py-2 text-xs" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>{String(i + 1).padStart(2, "0")}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <StatusDot status={s.status} />
+                        <span style={{ color: "#0F172A" }}>{s.name}</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <select value={s.status} onChange={(e) => setStageStatus(i, e.target.value)}
+                        className="text-xs px-2 py-1 rounded border bg-white"
+                        style={{ borderColor: "#CBD5E1", color: "#334155", fontFamily: fontStack.body }}>
+                        <option value="not_started">Not started</option>
+                        <option value="in_progress">In progress</option>
+                        <option value="complete">Complete</option>
+                        <option value="blocked">Blocked</option>
+                        <option value="skipped">Skipped</option>
+                      </select>
+                    </td>
+                    <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: "#475569", fontFamily: fontStack.mono, whiteSpace: "nowrap" }}>
+                      {fmtDate(ts?.stageStart)}
+                    </td>
+                    <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: "#475569", fontFamily: fontStack.mono, whiteSpace: "nowrap" }}>
+                      {fmtDate(ts?.stageEnd)}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <input type="number" min="0" value={s.plannedDays}
+                        onChange={(e) => updateStage(i, { plannedDays: Number(e.target.value) })}
+                        disabled={s.status === "complete" || s.status === "skipped"}
+                        className="w-14 text-right px-2 py-1 rounded border text-xs disabled:bg-slate-100 disabled:text-slate-400"
+                        style={{ borderColor: "#CBD5E1", fontFamily: fontStack.mono, color: "#0F172A" }} />
+                      <span className="ml-1 text-xs" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>d</span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
