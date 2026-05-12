@@ -1327,9 +1327,14 @@ function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, s
                       opacity: (p.state === "pre_pipeline" || p.state === "not_applicable") ? 0.75 : 1,
                     }}>
                     <td className="px-3 py-3" style={{ color: "#64748B" }}>{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</td>
-                    <td className="px-3 py-3">
-                      <div className="font-semibold text-sm" style={{ color: FAO_NAVY, fontFamily: fontStack.mono }}>{p.pr}</div>
-                      {p.lot && <div className="text-xs" style={{ color: "#64748B", fontFamily: fontStack.mono }}>{p.lot}</div>}
+                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        value={p.pr}
+                        onChange={(e) => updateProcurement({ ...p, pr: e.target.value })}
+                        className="font-semibold text-sm w-full bg-transparent border border-transparent hover:border-slate-200 focus:border-slate-300 rounded px-1 py-0.5"
+                        style={{ color: FAO_NAVY, fontFamily: fontStack.mono, outline: "none", minWidth: 80 }}
+                      />
+                      {p.lot && <div className="text-xs px-1" style={{ color: "#64748B", fontFamily: fontStack.mono }}>{p.lot}</div>}
                     </td>
                     <td className="px-3 py-3" style={{ maxWidth: "260px" }}>
                       <div className="text-sm font-medium leading-snug" style={{ color: "#0F172A" }}>{p.tender}</div>
