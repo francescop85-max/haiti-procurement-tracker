@@ -23,6 +23,8 @@ import {
   X,
   Download,
   GripVertical,
+  CalendarDays,
+  ChevronUp,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
@@ -882,6 +884,186 @@ const LegendDot = ({ color, label }) => (
     <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: color }} />{label}
   </span>
 );
+
+function getNextStep(p) {
+  const stages = p.stages;
+  // In-progress stage is the current active step
+  const active = stages.find((s) => s.status === "in_progress");
+  if (active) return { stage: active, isCurrent: true };
+  // Otherwise first not_started after last complete
+  const lastComplete = [...stages].reverse().find((s) => s.status === "complete");
+  const lastCompleteIdx = lastComplete ? stages.lastIndexOf(lastComplete) : -1;
+  const next = stages.slice(lastCompleteIdx + 1).find((s) => s.status === "not_started");
+  return next ? { stage: next, isCurrent: false } : null;
+}
+
+function UpcomingActivities({ enriched }) {
+  const HORIZON_DAYS = 60;
+  const [horizon, setHorizon] = useState(HORIZON_DAYS);
+
+  const activities = useMemo(() => {
+    const items = [];
+    enriched.forEach((p) => {
+      if (p.state === "cancelled" || p.state === "not_applicable") return;
+      const next = getNextStep(p);
+      if (!next) return;
+      const { stages: timed } = computeTimeline(p);
+      const timedStage = timed.find((s) => s.key === next.stage.key);
+      items.push({
+        p,
+        stage: next.stage,
+        isCurrent: next.isCurrent,
+        stageStart: timedStage?.stageStart || null,
+        stageEnd: timedStage?.stageEnd || null,
+        daysUntilStart: timedStage?.stageStart ? daysBetween(TODAY, timedStage.stageStart) : null,
+        daysUntilEnd: timedStage?.stageEnd ? daysBetween(TODAY, timedStage.stageEnd) : null,
+      });
+    });
+    return items
+      .filter((a) => a.daysUntilEnd === null || a.daysUntilEnd <= horizon)
+      .sort((a, b) => {
+        const ad = a.stageEnd?.getTime() ?? Infinity;
+        const bd = b.stageEnd?.getTime() ?? Infinity;
+        return ad - bd;
+      });
+  }, [enriched, horizon]);
+
+  // Group by week label relative to today
+  const grouped = useMemo(() => {
+    const groups = [];
+    let currentLabel = null;
+    activities.forEach((a) => {
+      const d = a.stageEnd;
+      let label;
+      if (!d) {
+        label = "No date set";
+      } else {
+        const diff = daysBetween(TODAY, d);
+        if (diff < 0) label = "Overdue";
+        else if (diff === 0) label = "Due today";
+        else if (diff <= 7) label = "This week";
+        else if (diff <= 14) label = "Next week";
+        else {
+          const monday = new Date(d);
+          monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+          label = `Week of ${fmtDate(monday)}`;
+        }
+      }
+      if (label !== currentLabel) { groups.push({ label, items: [] }); currentLabel = label; }
+      groups[groups.length - 1].items.push(a);
+    });
+    return groups;
+  }, [activities]);
+
+  const urgencyStyle = (daysUntilEnd) => {
+    if (daysUntilEnd === null) return { color: "#64748B", bg: "#F8FAFC", dot: "#94A3B8" };
+    if (daysUntilEnd < 0)  return { color: "#B91C1C", bg: "#FEF2F2", dot: "#DC2626" };
+    if (daysUntilEnd <= 3) return { color: "#B45309", bg: "#FFFBEB", dot: "#D97706" };
+    if (daysUntilEnd <= 7) return { color: "#0369A1", bg: "#EFF6FF", dot: "#0284C7" };
+    return { color: "#334155", bg: "white", dot: "#94A3B8" };
+  };
+
+  return (
+    <div className="space-y-2">
+      {/* Header bar */}
+      <div className="rounded-xl border bg-white p-4 flex items-center justify-between flex-wrap gap-3" style={{ borderColor: "#E2E8F0" }}>
+        <div className="flex items-center gap-3">
+          <CalendarDays size={18} style={{ color: FAO_NAVY }} />
+          <div>
+            <h3 className="text-sm font-bold" style={{ color: FAO_NAVY, fontFamily: fontStack.display }}>Upcoming procurement activities</h3>
+            <p className="text-xs mt-0.5" style={{ color: "#64748B", fontFamily: fontStack.body }}>Next pending step per active procurement · sorted by deadline</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 text-xs" style={{ fontFamily: fontStack.body, color: "#475569" }}>
+          <span>Show next</span>
+          {[30, 60, 90].map((d) => (
+            <button key={d} onClick={() => setHorizon(d)}
+              className="px-2.5 py-1 rounded-md border transition"
+              style={{ backgroundColor: horizon === d ? FAO_NAVY : "white", color: horizon === d ? "white" : "#475569", borderColor: horizon === d ? FAO_NAVY : "#CBD5E1" }}>
+              {d}d
+            </button>
+          ))}
+          <button onClick={() => setHorizon(365)}
+            className="px-2.5 py-1 rounded-md border transition"
+            style={{ backgroundColor: horizon === 365 ? FAO_NAVY : "white", color: horizon === 365 ? "white" : "#475569", borderColor: horizon === 365 ? FAO_NAVY : "#CBD5E1" }}>
+            All
+          </button>
+        </div>
+      </div>
+
+      {activities.length === 0 && (
+        <div className="rounded-xl border bg-white p-8 text-center" style={{ borderColor: "#E2E8F0" }}>
+          <p className="text-sm" style={{ color: "#94A3B8", fontFamily: fontStack.body }}>No upcoming activities in the next {horizon} days.</p>
+        </div>
+      )}
+
+      {grouped.map((group) => (
+        <div key={group.label}>
+          {/* Week divider */}
+          <div className="flex items-center gap-3 px-1 py-2">
+            <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>{group.label}</span>
+            <div className="flex-1 h-px" style={{ backgroundColor: "#E2E8F0" }} />
+            <span className="text-[10px]" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>{group.items.length} action{group.items.length !== 1 ? "s" : ""}</span>
+          </div>
+
+          <div className="space-y-2">
+            {group.items.map((a) => {
+              const urg = urgencyStyle(a.daysUntilEnd);
+              const computed = a.p.computed;
+              return (
+                <div key={`${a.p.id}-${a.stage.key}`}
+                  className="rounded-xl border flex items-stretch overflow-hidden"
+                  style={{ borderColor: "#E2E8F0", backgroundColor: urg.bg }}>
+
+                  {/* Left accent */}
+                  <div className="w-1 flex-shrink-0" style={{ backgroundColor: CATEGORY_COLORS[a.p.category] || "#94A3B8" }} />
+
+                  {/* Main content */}
+                  <div className="flex-1 px-4 py-3 grid gap-1" style={{ gridTemplateColumns: "1fr auto" }}>
+                    <div>
+                      {/* Procurement title */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-semibold" style={{ color: FAO_NAVY, fontFamily: fontStack.body }}>{a.p.tender}</span>
+                        {a.p.lot && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: "#F1F5F9", color: "#64748B", fontFamily: fontStack.mono }}>{a.p.lot}</span>}
+                        <MethodBadge method={a.p.method} />
+                        <CategoryDot category={a.p.category} />
+                        <span className="text-xs" style={{ color: "#64748B", fontFamily: fontStack.body }}>{a.p.category}</span>
+                      </div>
+                      {/* Next step */}
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded`}
+                          style={{ backgroundColor: a.isCurrent ? "#DBEAFE" : "#F1F5F9", color: a.isCurrent ? "#1E40AF" : "#475569", fontFamily: fontStack.mono }}>
+                          {a.isCurrent ? "In progress" : "Up next"}
+                        </span>
+                        <span className="text-sm font-medium" style={{ color: "#0F172A", fontFamily: fontStack.body }}>{a.stage.name}</span>
+                        <span className="text-xs" style={{ color: "#64748B", fontFamily: fontStack.mono }}>
+                          {a.stageStart && a.stageEnd ? `${fmtDate(a.stageStart)} → ${fmtDate(a.stageEnd)} · ${a.stage.plannedDays}d` : "—"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Right: deadline + risk */}
+                    <div className="flex flex-col items-end justify-between pl-4">
+                      <RiskPill risk={computed.risk} compact />
+                      {a.stageEnd && (
+                        <div className="text-right mt-1">
+                          <div className="text-xs font-semibold" style={{ color: urg.color, fontFamily: fontStack.mono }}>
+                            {a.daysUntilEnd < 0 ? `${Math.abs(a.daysUntilEnd)}d overdue` : a.daysUntilEnd === 0 ? "Due today" : `${a.daysUntilEnd}d left`}
+                          </div>
+                          <div className="text-[10px]" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>due {fmtDate(a.stageEnd)}</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function AnalyticsTab({ enriched }) {
   const byCategory = useMemo(() => {
@@ -1837,6 +2019,7 @@ export default function App() {
         <TabButton id="pipeline" label="Pipeline" Icon={ListIcon} />
         <TabButton id="gantt" label="Gantt" Icon={GanttChartSquare} />
         <TabButton id="analytics" label="Analytics" Icon={BarChart3} />
+        <TabButton id="upcoming" label="Upcoming" Icon={CalendarDays} />
 
         <button
           onClick={() => setShowAdd(true)}
@@ -1896,6 +2079,7 @@ export default function App() {
         )}
         {tab === "gantt" && <GanttChart procurements={filtered} onUpdate={updateProcurement} />}
         {tab === "analytics" && <AnalyticsTab enriched={enriched} />}
+        {tab === "upcoming" && <UpcomingActivities enriched={enriched} />}
       </div>
 
       {showAdd && <AddProcurementModal onAdd={handleAdd} onClose={() => setShowAdd(false)} />}
