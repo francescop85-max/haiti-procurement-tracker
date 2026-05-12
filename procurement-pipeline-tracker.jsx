@@ -22,6 +22,7 @@ import {
   Plus,
   X,
   Download,
+  GripVertical,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
@@ -365,8 +366,31 @@ function StageEditor({ procurement, onUpdate }) {
     const merged = fresh.map((f, i) => ({ ...f, status: procurement.stages[i]?.status || "not_started" }));
     onUpdate({ ...procurement, stages: merged });
   };
-  const [addingAfter, setAddingAfter] = useState(null); // index after which to insert, or "end"
+  const [addingAfter, setAddingAfter] = useState(null);
   const [newStepName, setNewStepName] = useState("");
+  const [dragSrc, setDragSrc] = useState(null);
+  const [dragOver, setDragOver] = useState(null);
+
+  const onDragStart = (i) => (e) => {
+    setDragSrc(i);
+    e.dataTransfer.effectAllowed = "move";
+  };
+  const onDragOver = (i) => (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (i !== dragSrc) setDragOver(i);
+  };
+  const onDrop = (i) => (e) => {
+    e.preventDefault();
+    if (dragSrc === null || dragSrc === i) { setDragSrc(null); setDragOver(null); return; }
+    const stages = [...procurement.stages];
+    const [moved] = stages.splice(dragSrc, 1);
+    stages.splice(i, 0, moved);
+    onUpdate({ ...procurement, stages });
+    setDragSrc(null);
+    setDragOver(null);
+  };
+  const onDragEnd = () => { setDragSrc(null); setDragOver(null); };
 
   const insertCustomStep = (afterIdx) => {
     if (!newStepName.trim()) return;
@@ -422,34 +446,48 @@ function StageEditor({ procurement, onUpdate }) {
           <table className="w-full text-sm" style={{ fontFamily: fontStack.body }}>
             <thead>
               <tr className="text-[10px] uppercase tracking-wider" style={{ backgroundColor: "#F1F5F9", color: "#64748B" }}>
+                <th className="w-6" />
                 <th className="text-left px-3 py-2 font-semibold">#</th>
                 <th className="text-left px-3 py-2 font-semibold">Stage</th>
                 <th className="text-center px-3 py-2 font-semibold">Status</th>
                 <th className="text-right px-3 py-2 font-semibold">Start</th>
                 <th className="text-right px-3 py-2 font-semibold">End</th>
                 <th className="text-right px-3 py-2 font-semibold">Days</th>
-                <th className="w-6" />
+                <th className="w-14" />
               </tr>
             </thead>
             <tbody>
               {procurement.stages.map((s, i) => {
                 const ts = timedStages[i];
                 const isAdding = addingAfter === i;
+                const isDragging = dragSrc === i;
+                const isDropTarget = dragOver === i;
                 return (
                   <React.Fragment key={s.key}>
-                    <tr className="border-t group" style={{ borderColor: "#F1F5F9", backgroundColor: s.status === "in_progress" ? "#EFF6FF" : "white" }}>
+                    <tr
+                      draggable
+                      onDragStart={onDragStart(i)}
+                      onDragOver={onDragOver(i)}
+                      onDrop={onDrop(i)}
+                      onDragEnd={onDragEnd}
+                      className="border-t group"
+                      style={{
+                        borderColor: isDropTarget ? FAO_BLUE : "#F1F5F9",
+                        backgroundColor: isDragging ? "#F0F9FF" : isDropTarget ? "#EFF6FF" : s.status === "in_progress" ? "#EFF6FF" : "white",
+                        opacity: isDragging ? 0.4 : 1,
+                        outline: isDropTarget ? `2px solid ${FAO_BLUE}` : undefined,
+                      }}>
+                      <td className="pl-2 py-2 cursor-grab active:cursor-grabbing" style={{ color: "#CBD5E1" }}>
+                        <GripVertical size={14} />
+                      </td>
                       <td className="px-3 py-2 text-xs" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>{String(i + 1).padStart(2, "0")}</td>
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-2">
                           <StatusDot status={s.status} />
-                          {s.custom ? (
-                            <input value={s.name} onChange={(e) => updateStage(i, { name: e.target.value })}
-                              className="flex-1 text-sm px-1.5 py-0.5 rounded border"
-                              style={{ borderColor: "#CBD5E1", fontFamily: fontStack.body, color: "#0F172A", minWidth: 0 }} />
-                          ) : (
-                            <span style={{ color: "#0F172A" }}>{s.name}</span>
-                          )}
-                          {s.custom && <span className="text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider" style={{ backgroundColor: "#EDE9FE", color: "#5B21B6", fontFamily: fontStack.mono }}>custom</span>}
+                          <input value={s.name} onChange={(e) => updateStage(i, { name: e.target.value })}
+                            className="flex-1 text-sm px-1.5 py-0.5 rounded border border-transparent hover:border-slate-200 focus:border-slate-300 bg-transparent"
+                            style={{ fontFamily: fontStack.body, color: "#0F172A", minWidth: 0, outline: "none" }} />
+                          {s.custom && <span className="text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider flex-shrink-0" style={{ backgroundColor: "#EDE9FE", color: "#5B21B6", fontFamily: fontStack.mono }}>custom</span>}
                         </div>
                       </td>
                       <td className="px-3 py-2 text-center">
@@ -491,13 +529,11 @@ function StageEditor({ procurement, onUpdate }) {
                             style={{ color: FAO_BLUE }}>
                             <Plus size={13} />
                           </button>
-                          {s.custom && (
-                            <button onClick={() => deleteCustomStep(i)} title="Remove step"
-                              className="opacity-0 group-hover:opacity-100 transition p-1 rounded hover:bg-red-50"
-                              style={{ color: "#DC2626" }}>
-                              <X size={13} />
-                            </button>
-                          )}
+                          <button onClick={() => deleteCustomStep(i)} title="Remove step"
+                            className="opacity-0 group-hover:opacity-100 transition p-1 rounded hover:bg-red-50"
+                            style={{ color: "#DC2626" }}>
+                            <X size={13} />
+                          </button>
                         </div>
                       </td>
                     </tr>
