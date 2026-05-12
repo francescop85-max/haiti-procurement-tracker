@@ -1346,7 +1346,49 @@ function AddProcurementModal({ onAdd, onClose }) {
   );
 }
 
+const PASSWORD = "fao-haiti-2026";
+
+function LoginGate({ onAuth }) {
+  const [value, setValue] = useState("");
+  const [error, setError] = useState(false);
+  const submit = () => {
+    if (value === PASSWORD) { onAuth(); }
+    else { setError(true); setValue(""); }
+  };
+  return (
+    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: "#F1F5F9" }}>
+      <div className="w-full max-w-sm rounded-2xl border p-8 shadow-sm" style={{ backgroundColor: "white", borderColor: "#E2E8F0" }}>
+        <div className="mb-6 text-center">
+          <div className="text-xs uppercase tracking-widest mb-1" style={{ color: FAO_BLUE, fontFamily: fontStack.body }}>FAO Haiti · OCHA</div>
+          <h1 className="text-2xl font-bold" style={{ color: FAO_NAVY, fontFamily: fontStack.display }}>Procurement Tracking</h1>
+        </div>
+        <div className="space-y-3">
+          <input
+            type="password"
+            placeholder="Password"
+            value={value}
+            autoFocus
+            onChange={(e) => { setValue(e.target.value); setError(false); }}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+            className="w-full px-4 py-2.5 rounded-lg border text-sm"
+            style={{ borderColor: error ? "#DC2626" : "#CBD5E1", fontFamily: fontStack.body, outline: "none" }}
+          />
+          {error && <p className="text-xs" style={{ color: "#DC2626", fontFamily: fontStack.body }}>Incorrect password.</p>}
+          <button
+            onClick={submit}
+            className="w-full py-2.5 rounded-lg text-sm font-semibold text-white"
+            style={{ backgroundColor: FAO_NAVY, fontFamily: fontStack.body }}
+          >
+            Enter
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  const [authed, setAuthed] = useState(false);
   const [procurements, setProcurements] = useState(initializeProcurements);
   const [expandedId, setExpandedId] = useState(null);
   const [riskFilter, setRiskFilter] = useState("all");
@@ -1355,6 +1397,8 @@ export default function App() {
   const [sortBy, setSortBy] = useState("estPO");
   const [sortDir, setSortDir] = useState("desc");
   const [showAdd, setShowAdd] = useState(false);
+
+  if (!authed) return <LoginGate onAuth={() => setAuthed(true)} />;
 
   const handleAdd = useCallback((newProc) => {
     setProcurements((prev) => [newProc, ...prev]);
