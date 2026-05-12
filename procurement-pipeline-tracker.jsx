@@ -366,6 +366,28 @@ function StageEditor({ procurement, onUpdate }) {
   const computed = computeProcurement(procurement);
   const { stages: timedStages } = computeTimeline(procurement);
 
+  const updateStageStart = (i, isoDate) => {
+    const stages = procurement.stages.map((s, idx) => {
+      if (idx === i) return { ...s, stageStartOverride: isoDate || undefined };
+      if (idx > i) return { ...s, stageStartOverride: undefined }; // clear downstream pins so they cascade
+      return s;
+    });
+    onUpdate({ ...procurement, stages });
+  };
+
+  const updateStageEnd = (i, isoDate) => {
+    const start = timedStages[i]?.stageStart;
+    const newEnd = parseDate(isoDate);
+    if (!start || !newEnd) return;
+    const newDays = Math.max(0, Math.round((newEnd - start) / 86400000));
+    const stages = procurement.stages.map((s, idx) => {
+      if (idx === i) return { ...s, plannedDays: newDays };
+      if (idx > i) return { ...s, stageStartOverride: undefined };
+      return s;
+    });
+    onUpdate({ ...procurement, stages });
+  };
+
   return (
     <div className="grid grid-cols-12 gap-6">
       <div className="col-span-12 lg:col-span-7">
@@ -412,11 +434,17 @@ function StageEditor({ procurement, onUpdate }) {
                         <option value="skipped">Skipped</option>
                       </select>
                     </td>
-                    <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: "#475569", fontFamily: fontStack.mono, whiteSpace: "nowrap" }}>
-                      {fmtDate(ts?.stageStart)}
+                    <td className="px-2 py-1.5">
+                      <input type="date" value={ts?.stageStart ? toISODate(ts.stageStart) : ""}
+                        onChange={(e) => updateStageStart(i, e.target.value)}
+                        className="px-1.5 py-1 rounded border text-[11px] w-32"
+                        style={{ borderColor: s.stageStartOverride ? FAO_BLUE : "#CBD5E1", fontFamily: fontStack.mono, color: "#0F172A", outline: "none" }} />
                     </td>
-                    <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: "#475569", fontFamily: fontStack.mono, whiteSpace: "nowrap" }}>
-                      {fmtDate(ts?.stageEnd)}
+                    <td className="px-2 py-1.5">
+                      <input type="date" value={ts?.stageEnd ? toISODate(ts.stageEnd) : ""}
+                        onChange={(e) => updateStageEnd(i, e.target.value)}
+                        className="px-1.5 py-1 rounded border text-[11px] w-32"
+                        style={{ borderColor: "#CBD5E1", fontFamily: fontStack.mono, color: "#0F172A", outline: "none" }} />
                     </td>
                     <td className="px-3 py-2 text-right">
                       <input type="number" min="0" value={s.plannedDays}
@@ -534,6 +562,7 @@ function computeTimeline(p) {
     }
   }
 
+  // Build base timeline from anchor outward
   const out = stages.map((s) => ({ ...s, stageStart: null, stageEnd: null }));
   out[anchorIdx].stageStart = anchorDate;
   out[anchorIdx].stageEnd = addDays(anchorDate, Number(out[anchorIdx].plannedDays) || 0);
@@ -545,6 +574,21 @@ function computeTimeline(p) {
     out[i].stageEnd = out[i + 1].stageStart;
     out[i].stageStart = addDays(out[i].stageEnd, -(Number(out[i].plannedDays) || 0));
   }
+
+  // Apply per-stage start overrides: each override pins that stage and cascades
+  // forward until the next pinned stage.
+  for (let i = 0; i < out.length; i++) {
+    const override = parseDate(stages[i].stageStartOverride);
+    if (!override) continue;
+    out[i].stageStart = override;
+    out[i].stageEnd = addDays(override, Number(stages[i].plannedDays) || 0);
+    for (let j = i + 1; j < out.length; j++) {
+      if (stages[j].stageStartOverride) break; // stop at next explicit pin
+      out[j].stageStart = out[j - 1].stageEnd;
+      out[j].stageEnd = addDays(out[j].stageStart, Number(stages[j].plannedDays) || 0);
+    }
+  }
+
   return { stages: out, timelineStart: out[0].stageStart, timelineEnd: out[out.length - 1].stageEnd };
 }
 
