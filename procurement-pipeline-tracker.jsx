@@ -103,8 +103,8 @@ const ITB_STAGES_BASE = [
   { key: "pr_received", name: "PR received & validated", defaultDays: 2 },
   { key: "market_analysis", name: "Sourcing & market analysis", defaultDays: 7 },
   { key: "solicitation_prep", name: "Solicitation document prep", defaultDays: 5 },
-  { key: "published", name: "Solicitation published (InTend)", defaultDays: 21 },
-  { key: "clarifications", name: "Clarifications period", defaultDays: 0 },
+  { key: "published", name: "Solicitation published (InTend)", defaultDays: 1 },
+  { key: "submission", name: "Bid submission period (incl. clarifications)", defaultDays: 21 },
   { key: "closing", name: "Bid closing & opening", defaultDays: 1 },
   { key: "tech_eval", name: "Technical evaluation", defaultDays: 15 },
   { key: "fin_eval", name: "Financial evaluation", defaultDays: 5 },
@@ -119,8 +119,8 @@ const RFP_STAGES_BASE = [
   { key: "market_analysis", name: "Sourcing & market analysis", defaultDays: 7 },
   { key: "solicitation_prep", name: "Solicitation document prep", defaultDays: 7 },
   { key: "lpc_exante", name: "LPC ex-ante review (criteria)", defaultDays: 7 },
-  { key: "published", name: "Solicitation published (InTend)", defaultDays: 30 },
-  { key: "clarifications", name: "Clarifications period", defaultDays: 0 },
+  { key: "published", name: "Solicitation published (InTend)", defaultDays: 1 },
+  { key: "submission", name: "Proposal submission period (incl. clarifications)", defaultDays: 30 },
   { key: "closing", name: "Bid closing & opening", defaultDays: 1 },
   { key: "tech_eval", name: "Technical evaluation (env. 1)", defaultDays: 15 },
   { key: "fin_eval", name: "Financial evaluation (env. 2)", defaultDays: 5 },
@@ -1432,37 +1432,109 @@ function EditableNarrative({ value, onChange }) {
   );
 }
 
-function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, setSort, updateProcurement }) {
-  const sortIndicator = (key) => sortBy !== key ? null : sortDir === "desc" ? <ArrowDown size={10} className="inline ml-1" /> : <ArrowUp size={10} className="inline ml-1" />;
+const DEFAULT_COL_WIDTHS = {
+  expand: 32,
+  pr: 110,
+  intend: 140,
+  tender: 280,
+  category: 180,
+  method: 80,
+  estInitial: 110,
+  estPO: 110,
+  variance: 60,
+  currentStage: 200,
+  nBids: 80,
+  nResponsive: 90,
+  narrative: 260,
+  targetPO: 100,
+  estPODate: 100,
+  risk: 90,
+};
 
-  const SortableHeader = ({ keyName, label, align = "left" }) => (
+function ResizeHandle({ colKey, onResize }) {
+  const startRef = useRef(null);
+  const onMouseDown = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const th = e.currentTarget.parentElement;
+    startRef.current = { x: e.clientX, w: th.getBoundingClientRect().width };
+    const move = (ev) => {
+      const delta = ev.clientX - startRef.current.x;
+      onResize(colKey, Math.max(50, startRef.current.w + delta));
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+  return (
+    <span
+      onMouseDown={onMouseDown}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute",
+        right: 0, top: 0, bottom: 0,
+        width: 6, cursor: "col-resize",
+        userSelect: "none",
+      }}
+    />
+  );
+}
+
+function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, setSort, updateProcurement, colWidths, setColWidth }) {
+  const sortIndicator = (key) => sortBy !== key ? null : sortDir === "desc" ? <ArrowDown size={10} className="inline ml-1" /> : <ArrowUp size={10} className="inline ml-1" />;
+  const widthFor = (k) => colWidths[k] ?? DEFAULT_COL_WIDTHS[k];
+
+  const SortableHeader = ({ keyName, label, align = "left", colKey, resizable = true }) => (
     <th onClick={() => setSort(keyName)}
       className={`px-3 py-3 text-[10px] uppercase tracking-wider font-semibold cursor-pointer select-none transition text-${align}`}
-      style={{ color: "white", backgroundColor: sortBy === keyName ? "#243B57" : undefined }}>
+      style={{ color: "white", backgroundColor: sortBy === keyName ? "#243B57" : undefined, position: "relative" }}>
       {label} {sortIndicator(keyName)}
+      {resizable && <ResizeHandle colKey={colKey || keyName} onResize={setColWidth} />}
     </th>
   );
 
   return (
     <div className="rounded-xl border overflow-hidden bg-white" style={{ borderColor: "#E2E8F0" }}>
+      <style>{`.pipeline-table td { white-space: normal; word-break: break-word; overflow-wrap: anywhere; vertical-align: top; }`}</style>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm" style={{ fontFamily: fontStack.body, minWidth: "1700px" }}>
+        <table className="text-sm pipeline-table" style={{ fontFamily: fontStack.body, tableLayout: "fixed", width: "max-content", minWidth: "100%" }}>
+          <colgroup>
+            {["expand","pr","intend","tender","category","method","estInitial","estPO","variance","currentStage","nBids","nResponsive","narrative","targetPO","estPODate","risk"].map((k) => (
+              <col key={k} style={{ width: widthFor(k) }} />
+            ))}
+          </colgroup>
           <thead>
             <tr style={{ backgroundColor: FAO_NAVY, color: "white" }}>
-              <th className="w-8 px-3 py-3"></th>
+              <th className="px-3 py-3"></th>
               <SortableHeader keyName="pr" label="PR / Lot" />
               <SortableHeader keyName="intend" label="Reference" />
-              <th className="text-left px-3 py-3 text-[10px] uppercase tracking-wider font-semibold" style={{ color: "white" }}>Tender</th>
+              <th className="text-left px-3 py-3 text-[10px] uppercase tracking-wider font-semibold" style={{ color: "white", position: "relative" }}>
+                Tender
+                <ResizeHandle colKey="tender" onResize={setColWidth} />
+              </th>
               <SortableHeader keyName="category" label="Category" />
-              <SortableHeader keyName="method" label="Method" align="center" />
+              <SortableHeader keyName="method" label="Method" align="center" colKey="method" />
               <SortableHeader keyName="estInitial" label="Est. PR" align="right" />
               <SortableHeader keyName="estPO" label="Est. PO" align="right" />
-              <th className="text-center px-3 py-3 text-[10px] uppercase tracking-wider font-semibold select-none" style={{ color: "white" }}>Δ</th>
+              <th className="text-center px-3 py-3 text-[10px] uppercase tracking-wider font-semibold select-none" style={{ color: "white", position: "relative" }}>
+                Δ
+                <ResizeHandle colKey="variance" onResize={setColWidth} />
+              </th>
               <SortableHeader keyName="currentStage" label="Current stage" />
-              <th className="text-center px-3 py-3 text-[10px] uppercase tracking-wider font-semibold select-none" style={{ color: "white" }}>Bids rec.</th>
-              <th className="text-center px-3 py-3 text-[10px] uppercase tracking-wider font-semibold select-none" style={{ color: "white" }}>Responsive</th>
-              <th className="text-left px-3 py-3 text-[10px] uppercase tracking-wider font-semibold select-none" style={{ minWidth: 250, color: "white" }}>
+              <th className="text-center px-3 py-3 text-[10px] uppercase tracking-wider font-semibold select-none" style={{ color: "white", position: "relative" }}>
+                Bids rec.
+                <ResizeHandle colKey="nBids" onResize={setColWidth} />
+              </th>
+              <th className="text-center px-3 py-3 text-[10px] uppercase tracking-wider font-semibold select-none" style={{ color: "white", position: "relative" }}>
+                Responsive
+                <ResizeHandle colKey="nResponsive" onResize={setColWidth} />
+              </th>
+              <th className="text-left px-3 py-3 text-[10px] uppercase tracking-wider font-semibold select-none" style={{ color: "white", position: "relative" }}>
                 Status narrative
+                <ResizeHandle colKey="narrative" onResize={setColWidth} />
               </th>
               <SortableHeader keyName="targetPO" label="Target PO" align="center" />
               <SortableHeader keyName="estPODate" label="Est. PO" align="center" />
@@ -1495,7 +1567,7 @@ function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, s
                       />
                       {p.lot && <div className="text-xs px-1" style={{ color: "#64748B", fontFamily: fontStack.mono }}>{p.lot}</div>}
                     </td>
-                    <td className="px-3 py-3" style={{ width: 130 }} onClick={(e) => e.stopPropagation()}>
+                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                       <input
                         value={p.intend}
                         onChange={(e) => updateProcurement({ ...p, intend: e.target.value })}
@@ -1504,7 +1576,7 @@ function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, s
                         style={{ color: "#475569", fontFamily: fontStack.mono, outline: "none" }}
                       />
                     </td>
-                    <td className="px-3 py-3" style={{ minWidth: 280 }} onClick={(e) => e.stopPropagation()}>
+                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                       <textarea
                         value={p.tender}
                         onChange={(e) => updateProcurement({ ...p, tender: e.target.value })}
@@ -2048,6 +2120,14 @@ export default function App() {
   const [methodFilter, setMethodFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [stageFilter, setStageFilter] = useState("all");
+  const [colWidths, setColWidths] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("pipelineColWidths") || "{}"); } catch { return {}; }
+  });
+  const setColWidth = (key, w) => setColWidths((prev) => {
+    const next = { ...prev, [key]: w };
+    try { localStorage.setItem("pipelineColWidths", JSON.stringify(next)); } catch {}
+    return next;
+  });
   const [tab, setTab] = useState("pipeline");
   const [sortBy, setSortBy] = useState("estPO");
   const [sortDir, setSortDir] = useState("desc");
@@ -2071,9 +2151,35 @@ export default function App() {
         if (data && Array.isArray(data.procurements) && data.procurements.length > 0) {
           // Rehydrate stage arrays through buildStages so any new keys (e.g. delivery) are merged in
           const merged = data.procurements.map((p) => {
+            // Migration: old structure had "published" (21/30d) + "clarifications".
+            // New structure: "published" (1d) + "submission" (21/30d). Move the duration over once.
+            let inStages = Array.isArray(p.stages) ? p.stages.slice() : p.stages;
+            let currentKey = p.currentKey;
+            if (Array.isArray(inStages)) {
+              const oldPub = inStages.find((s) => s.key === "published");
+              const hasSubmission = inStages.some((s) => s.key === "submission");
+              if (oldPub && !hasSubmission && (oldPub.plannedDays ?? 0) > 1) {
+                const carriedDays = oldPub.plannedDays;
+                const carriedStatus = oldPub.status === "complete" ? "complete"
+                  : oldPub.status === "in_progress" ? "in_progress" : "not_started";
+                inStages = inStages.map((s) =>
+                  s.key === "published" ? { ...s, plannedDays: 1 } : s
+                );
+                const idx = inStages.findIndex((s) => s.key === "published");
+                inStages.splice(idx + 1, 0, {
+                  key: "submission",
+                  name: "Bid submission period (incl. clarifications)",
+                  plannedDays: carriedDays,
+                  status: carriedStatus,
+                });
+              }
+              // Drop the deprecated clarifications stage
+              inStages = inStages.filter((s) => s.key !== "clarifications");
+            }
+            if (currentKey === "clarifications") currentKey = "submission";
             const deliveryDays = p.category && p.category.startsWith("Inputs") ? 21 : 0;
-            const stages = buildStages(p.method, p.estInitial, p.stages, deliveryDays);
-            return { ...p, stages };
+            const stages = buildStages(p.method, p.estInitial, inStages, deliveryDays);
+            return { ...p, stages, currentKey };
           });
           setProcurements(merged);
         } else {
@@ -2911,7 +3017,8 @@ export default function App() {
         {tab === "pipeline" && (
           <>
             <PipelineTable enriched={filtered} expandedId={expandedId} setExpandedId={setExpandedId}
-              sortBy={sortBy} sortDir={sortDir} setSort={setSort} updateProcurement={updateProcurement} />
+              sortBy={sortBy} sortDir={sortDir} setSort={setSort} updateProcurement={updateProcurement}
+              colWidths={colWidths} setColWidth={setColWidth} />
             <div className="mt-6 rounded-lg p-5 text-xs"
               style={{ backgroundColor: "white", border: "1px solid #E2E8F0", color: "#475569", fontFamily: fontStack.body, lineHeight: 1.6 }}>
               <div className="font-bold mb-2 text-[10px] uppercase tracking-widest" style={{ color: FAO_NAVY }}>Risk methodology</div>
