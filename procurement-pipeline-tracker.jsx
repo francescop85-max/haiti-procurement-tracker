@@ -100,6 +100,7 @@ const CATEGORY_COLORS = {
 };
 
 const ITB_STAGES_BASE = [
+  { key: "awaiting_pr", name: "Awaiting PR", defaultDays: 0 },
   { key: "pr_received", name: "PR received & validated", defaultDays: 2 },
   { key: "market_analysis", name: "Sourcing & market analysis", defaultDays: 7 },
   { key: "solicitation_prep", name: "Solicitation document prep", defaultDays: 5 },
@@ -115,6 +116,7 @@ const ITB_STAGES_BASE = [
 ];
 
 const RFP_STAGES_BASE = [
+  { key: "awaiting_pr", name: "Awaiting PR", defaultDays: 0 },
   { key: "pr_received", name: "PR received & validated", defaultDays: 2 },
   { key: "market_analysis", name: "Sourcing & market analysis", defaultDays: 7 },
   { key: "solicitation_prep", name: "Solicitation document prep", defaultDays: 7 },
