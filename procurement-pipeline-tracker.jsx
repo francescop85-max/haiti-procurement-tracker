@@ -664,6 +664,29 @@ function StageEditor({ procurement, onUpdate }) {
               <option value="awarded">Awarded / closed</option>
             </select>
             <div className="mt-3"><RiskPill risk={computed.risk} /></div>
+            <label className="text-xs block mt-4 mb-1" style={{ color: "#64748B", fontFamily: fontStack.body }}>Link to files</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="url"
+                value={procurement.filesLink || ""}
+                onChange={(e) => onUpdate({ ...procurement, filesLink: e.target.value })}
+                placeholder="https://…"
+                className="flex-1 px-2 py-1.5 rounded border text-sm"
+                style={{ borderColor: "#CBD5E1", color: "#0F172A", fontFamily: fontStack.mono }}
+              />
+              {procurement.filesLink && (
+                <a
+                  href={procurement.filesLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2 py-1.5 rounded border text-xs font-semibold whitespace-nowrap"
+                  style={{ borderColor: FAO_BLUE, color: FAO_BLUE, fontFamily: fontStack.body, textDecoration: "none" }}
+                  title="Open in new tab"
+                >
+                  Open ↗
+                </a>
+              )}
+            </div>
           </div>
         </div>
       </div>
