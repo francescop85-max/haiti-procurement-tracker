@@ -2171,7 +2171,7 @@ export default function App() {
     return next;
   });
   const [tab, setTab] = useState("pipeline");
-  const [sortBy, setSortBy] = useState("estPO");
+  const [sortBy, setSortBy] = useState("estInitial");
   const [sortDir, setSortDir] = useState("desc");
   const [showAdd, setShowAdd] = useState(false);
   const [distributionDays, setDistributionDays] = useState(DISTRIBUTION_DAYS);
