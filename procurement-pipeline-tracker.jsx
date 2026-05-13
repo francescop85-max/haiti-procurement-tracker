@@ -1463,16 +1463,16 @@ function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, s
                       />
                       {p.lot && <div className="text-xs px-1" style={{ color: "#64748B", fontFamily: fontStack.mono }}>{p.lot}</div>}
                     </td>
-                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                    <td className="px-3 py-3" style={{ width: 130 }} onClick={(e) => e.stopPropagation()}>
                       <input
                         value={p.intend}
                         onChange={(e) => updateProcurement({ ...p, intend: e.target.value })}
                         placeholder="—"
-                        className="text-xs w-full bg-transparent border border-transparent hover:border-slate-200 focus:border-slate-300 rounded px-1 py-0.5"
-                        style={{ color: "#475569", fontFamily: fontStack.mono, outline: "none", minWidth: 180 }}
+                        className="text-[11px] w-full bg-transparent border border-transparent hover:border-slate-200 focus:border-slate-300 rounded px-1 py-0.5"
+                        style={{ color: "#475569", fontFamily: fontStack.mono, outline: "none" }}
                       />
                     </td>
-                    <td className="px-3 py-3" style={{ maxWidth: "260px" }} onClick={(e) => e.stopPropagation()}>
+                    <td className="px-3 py-3" style={{ minWidth: 280 }} onClick={(e) => e.stopPropagation()}>
                       <textarea
                         value={p.tender}
                         onChange={(e) => updateProcurement({ ...p, tender: e.target.value })}
