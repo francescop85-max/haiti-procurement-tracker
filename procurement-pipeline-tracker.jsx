@@ -1481,13 +1481,39 @@ function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, s
                         style={{ color: "#0F172A", fontFamily: fontStack.body, outline: "none" }}
                       />
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-2">
                         <CategoryDot category={p.category} />
-                        <span className="text-xs" style={{ color: "#334155" }}>{p.category}</span>
+                        <select
+                          value={p.category}
+                          onChange={(e) => updateProcurement({ ...p, category: e.target.value })}
+                          className="text-xs bg-transparent border border-transparent hover:border-slate-200 focus:border-slate-300 rounded px-1 py-0.5"
+                          style={{ color: "#334155", fontFamily: fontStack.body, outline: "none" }}
+                        >
+                          {Object.keys(CATEGORY_COLORS).map((c) => <option key={c} value={c}>{c}</option>)}
+                          {!Object.keys(CATEGORY_COLORS).includes(p.category) && p.category && (
+                            <option value={p.category}>{p.category}</option>
+                          )}
+                        </select>
                       </div>
                     </td>
-                    <td className="px-3 py-3 text-center"><MethodBadge method={p.method} /></td>
+                    <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                      <select
+                        value={p.method}
+                        onChange={(e) => {
+                          const method = e.target.value;
+                          const deliveryDays = p.category?.startsWith("Inputs") ? 21 : 0;
+                          const stages = buildStages(method, p.estInitial, undefined, deliveryDays);
+                          const currentKey = stages.some((s) => s.key === p.currentKey) ? p.currentKey : stages[0]?.key;
+                          updateProcurement({ ...p, method, stages, currentKey });
+                        }}
+                        className="text-xs font-semibold bg-transparent border border-transparent hover:border-slate-200 focus:border-slate-300 rounded px-1 py-0.5"
+                        style={{ color: p.method === "ITB" ? "#1D4ED8" : "#7C3AED", fontFamily: fontStack.body, outline: "none" }}
+                      >
+                        <option value="ITB">ITB</option>
+                        <option value="RFP">RFP</option>
+                      </select>
+                    </td>
                     <td className="px-3 py-3 text-right text-sm tabular-nums" style={{ color: "#334155", fontFamily: fontStack.mono }}>{fmtUSD(p.estInitial)}</td>
                     <td className="px-3 py-3 text-right text-sm font-semibold tabular-nums" style={{ color: FAO_NAVY, fontFamily: fontStack.mono }}>{fmtUSD(p.estPO)}</td>
                     <td className="px-3 py-3 text-center"><VarianceTag variance={p.computed.variance} /></td>
