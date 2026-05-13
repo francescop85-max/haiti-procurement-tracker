@@ -57,14 +57,46 @@ const fontStack = {
 };
 
 const CATEGORY_COLORS = {
-  Livestock: "#0F766E",
+  // Agricultural & livestock inputs (trigger 21-day delivery stage via "Inputs " prefix)
   "Inputs - Seeds": "#65A30D",
-  "Inputs - Feed": "#CA8A04",
+  "Inputs - Seedlings & Nursery": "#84CC16",
   "Inputs - Fertilizer": "#9333EA",
+  "Inputs - Pesticides & Phytosanitary": "#A21CAF",
+  "Inputs - Feed": "#CA8A04",
+  "Inputs - Veterinary supplies": "#0EA5E9",
+  "Inputs - Irrigation": "#0891B2",
+  "Inputs - Fishing gear": "#1E40AF",
+  "Inputs - Post-harvest & Storage": "#B45309",
+  // Live animals
+  Livestock: "#0F766E",
+  Poultry: "#14B8A6",
+  Aquaculture: "#0D9488",
+  // Equipment / goods
   "Equipment - Agri": "#EA580C",
   "Equipment - ICT": "#0284C7",
+  "Equipment - Office & Furniture": "#475569",
+  "Equipment - Lab": "#7C3AED",
+  "Equipment - Vehicles": "#1F2937",
+  "Equipment - PPE & Safety": "#F59E0B",
+  "Equipment - Tools & Hand-tools": "#92400E",
+  "Equipment - Generators & Energy": "#FACC15",
+  // Services
   "Services - M&E": "#DB2777",
+  "Services - Consultancy": "#BE185D",
+  "Services - Training": "#E11D48",
+  "Services - Logistics & Transport": "#0369A1",
+  "Services - Translation & Interpretation": "#7E22CE",
+  "Services - Communications": "#2563EB",
+  "Services - Security": "#991B1B",
+  "Services - Financial (CVA / Cash transfer)": "#15803D",
+  "Services - Insurance": "#64748B",
+  // Works
+  "Works - Rehabilitation": "#C2410C",
+  "Works - Construction": "#7C2D12",
+  "Works - Civil / Infrastructure": "#A16207",
+  // Cross-cutting
   Visibility: "#6B7280",
+  Other: "#94A3B8",
 };
 
 const ITB_STAGES_BASE = [
