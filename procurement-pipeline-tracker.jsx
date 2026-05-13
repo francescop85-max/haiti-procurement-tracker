@@ -1419,6 +1419,7 @@ function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, s
             <tr style={{ backgroundColor: FAO_NAVY, color: "white" }}>
               <th className="w-8 px-3 py-3"></th>
               <SortableHeader keyName="pr" label="PR / Lot" />
+              <SortableHeader keyName="intend" label="Reference" />
               <th className="text-left px-3 py-3 text-[10px] uppercase tracking-wider font-semibold" style={{ color: "white" }}>Tender</th>
               <SortableHeader keyName="category" label="Category" />
               <SortableHeader keyName="method" label="Method" align="center" />
@@ -1462,9 +1463,23 @@ function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, s
                       />
                       {p.lot && <div className="text-xs px-1" style={{ color: "#64748B", fontFamily: fontStack.mono }}>{p.lot}</div>}
                     </td>
-                    <td className="px-3 py-3" style={{ maxWidth: "260px" }}>
-                      <div className="text-sm font-medium leading-snug" style={{ color: "#0F172A" }}>{p.tender}</div>
-                      <div className="text-xs mt-0.5 truncate" style={{ color: "#94A3B8", fontFamily: fontStack.mono }}>{p.intend}</div>
+                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        value={p.intend}
+                        onChange={(e) => updateProcurement({ ...p, intend: e.target.value })}
+                        placeholder="—"
+                        className="text-xs w-full bg-transparent border border-transparent hover:border-slate-200 focus:border-slate-300 rounded px-1 py-0.5"
+                        style={{ color: "#475569", fontFamily: fontStack.mono, outline: "none", minWidth: 180 }}
+                      />
+                    </td>
+                    <td className="px-3 py-3" style={{ maxWidth: "260px" }} onClick={(e) => e.stopPropagation()}>
+                      <textarea
+                        value={p.tender}
+                        onChange={(e) => updateProcurement({ ...p, tender: e.target.value })}
+                        rows={2}
+                        className="text-sm font-medium leading-snug w-full bg-transparent border border-transparent hover:border-slate-200 focus:border-slate-300 rounded px-1 py-0.5 resize-none"
+                        style={{ color: "#0F172A", fontFamily: fontStack.body, outline: "none" }}
+                      />
                     </td>
                     <td className="px-3 py-3">
                       <div className="flex items-center gap-2">
@@ -1523,7 +1538,7 @@ function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, s
                   </tr>
                   {isOpen && (
                     <tr>
-                      <td colSpan={15} className="p-0">
+                      <td colSpan={16} className="p-0">
                         <div className="border-t p-6 space-y-6" style={{ backgroundColor: "#F8FAFC", borderColor: "#E2E8F0" }}>
                           <StageEditor procurement={p} onUpdate={updateProcurement} />
                           <div className="border-t pt-6" style={{ borderColor: "#E2E8F0" }}>
@@ -1973,6 +1988,8 @@ export default function App() {
   const [expandedId, setExpandedId] = useState(null);
   const [riskFilter, setRiskFilter] = useState("all");
   const [methodFilter, setMethodFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [stageFilter, setStageFilter] = useState("all");
   const [tab, setTab] = useState("pipeline");
   const [sortBy, setSortBy] = useState("estPO");
   const [sortDir, setSortDir] = useState("desc");
@@ -2050,6 +2067,11 @@ export default function App() {
     const result = enriched.filter((p) => {
       if (methodFilter !== "all" && p.method !== methodFilter) return false;
       if (riskFilter !== "all" && p.computed.risk.level !== riskFilter) return false;
+      if (categoryFilter !== "all" && p.category !== categoryFilter) return false;
+      if (stageFilter !== "all") {
+        const cs = p.stages.find((s) => s.key === p.currentKey);
+        if ((cs?.name || "") !== stageFilter) return false;
+      }
       return true;
     });
     const riskOrder = { critical: 0, watch: 1, ok: 2, neutral: 3 };
@@ -2058,6 +2080,7 @@ export default function App() {
       let av, bv;
       switch (sortBy) {
         case "pr": av = a.pr; bv = b.pr; break;
+        case "intend": av = a.intend || ""; bv = b.intend || ""; break;
         case "category": av = a.category; bv = b.category; break;
         case "method": av = a.method; bv = b.method; break;
         case "estInitial": av = a.estInitial; bv = b.estInitial; break;
@@ -2073,7 +2096,22 @@ export default function App() {
       return 0;
     };
     return result.slice().sort(cmp);
-  }, [enriched, methodFilter, riskFilter, sortBy, sortDir]);
+  }, [enriched, methodFilter, riskFilter, categoryFilter, stageFilter, sortBy, sortDir]);
+
+  const stageOptions = useMemo(() => {
+    const names = new Set();
+    enriched.forEach((p) => {
+      const cs = p.stages.find((s) => s.key === p.currentKey);
+      if (cs?.name) names.add(cs.name);
+    });
+    return Array.from(names).sort();
+  }, [enriched]);
+
+  const categoryOptions = useMemo(() => {
+    const set = new Set(Object.keys(CATEGORY_COLORS));
+    enriched.forEach((p) => { if (p.category) set.add(p.category); });
+    return Array.from(set).sort();
+  }, [enriched]);
 
   const totals = useMemo(() => {
     const formal = enriched.filter((p) => p.state !== "pre_pipeline" && p.state !== "not_applicable");
@@ -2791,6 +2829,18 @@ export default function App() {
               <option value="ok">On track</option>
               <option value="watch">Watch</option>
               <option value="critical">Critical</option>
+            </select>
+            <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}
+              className="px-3 py-1.5 rounded-md border text-sm bg-white"
+              style={{ borderColor: "#CBD5E1", color: "#334155", fontFamily: fontStack.body }}>
+              <option value="all">All categories</option>
+              {categoryOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value)}
+              className="px-3 py-1.5 rounded-md border text-sm bg-white"
+              style={{ borderColor: "#CBD5E1", color: "#334155", fontFamily: fontStack.body }}>
+              <option value="all">All current stages</option>
+              {stageOptions.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
             <div className="text-xs" style={{ color: "#64748B", fontFamily: fontStack.body }}>
               {filtered.length} of {enriched.length} · click column to sort
