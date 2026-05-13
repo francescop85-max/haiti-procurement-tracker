@@ -402,7 +402,11 @@ function StageEditor({ procurement, onUpdate }) {
     } else {
       stages[idx] = { ...stages[idx], status };
     }
-    onUpdate({ ...procurement, stages });
+    // Recompute currentKey: first in_progress, else first non-complete/non-skipped, else last stage
+    const inProgress = stages.find((s) => s.status === "in_progress");
+    const nextOpen = stages.find((s) => s.status !== "complete" && s.status !== "skipped");
+    const currentKey = inProgress?.key || nextOpen?.key || stages[stages.length - 1]?.key || procurement.currentKey;
+    onUpdate({ ...procurement, stages, currentKey });
   };
   const resetDefaults = () => {
     const fresh = buildStages(procurement.method, procurement.estInitial, undefined, procurement.category.startsWith("Inputs") ? 21 : 0);
