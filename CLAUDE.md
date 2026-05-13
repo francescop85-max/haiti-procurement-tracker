@@ -28,8 +28,9 @@ Top to bottom, the layers are:
 **Constants & stage definitions**
 - `FAO_NAVY`, `FAO_BLUE`, `CATEGORY_COLORS` — brand tokens, used in inline styles.
 - `PROJECT_END = 2026-10-19`, `DISTRIBUTION_DAYS = 45` (default; user-editable in the Gantt header).
-- `ITB_STAGES_BASE` / `RFP_STAGES_BASE` — ordered workflow stages with default durations.
+- `ITB_STAGES_BASE` / `RFP_STAGES_BASE` — ordered workflow stages with default durations. Current order (ITB): `awaiting_pr` (0d, captures "no PR yet" state) → `pr_received` → `market_analysis` → `solicitation_prep` → `published` (1d, publishing event only) → `submission` (21d, incl. clarifications) → `closing` → `tech_eval` → `fin_eval` → `lpc_award` → `award` → `po_create` → `po_signed`. RFP swaps `fin_eval` to envelope #2, adds `lpc_exante` before `published`, `combined` after `fin_eval`, and ends in `negotiation` → `contract_signed`. The previously-separate `clarifications` stage was folded into `submission`.
 - `buildStages(method, value, existingStages, deliveryDays)` clones the right base, splices in RPC (≥ $200K) or HQPC (≥ $500K) review stages, appends a `Delivery of goods` stage when `deliveryDays > 0` (used for `Inputs - *` categories, 21 days), and merges any persisted stage data by key.
+- `CATEGORY_COLORS` is the canonical category taxonomy (~35 entries grouped as `Inputs - *`, live animals, `Equipment - *`, `Services - *`, `Works - *`, cross-cutting). Anything starting with `Inputs ` auto-appends the 21-day delivery stage.
 - `SEED` — the hardcoded starting list. It only seeds the **database** on first load; after that the DB is the source of truth.
 
 **Pure helpers**
@@ -42,18 +43,19 @@ Top to bottom, the layers are:
 
 **Feature panels**
 - `CommentsPanel` — timestamped log; state lives in the parent.
-- `StageEditor` — set stage status, planned days, names. Drag-reorder via HTML5 DnD; per-stage start/end dates; insert/delete custom steps; `resetDefaults` matches by stage `key` (not index) so reorder+reset is safe.
+- `StageEditor` — set stage status, planned days, names. Drag-reorder via HTML5 DnD; per-stage start/end dates; insert/delete custom steps; `resetDefaults` matches by stage `key` (not index) so reorder+reset is safe. `setStageStatus` also recomputes the procurement's `currentKey` (first `in_progress` → first non-complete/non-skipped → last) so the pipeline "Current stage" column updates in the same render.
 - `GanttChart` — segmented bar per procurement, draggable to shift dates; tooltip on hover; amber distribution-window zone (length editable in header); per-procurement orange hatched **Buffer / delay** zone toggled by a checkbox in the row label.
+- `PipelineTable` — uses `table-layout: fixed` with a `<colgroup>` driven by `colWidths` state in `App` (persisted to `localStorage.pipelineColWidths`); each `<th>` has a `ResizeHandle` for drag-resize. Cells use `word-break: break-word` so long text wraps. PR/Lot, Reference, Tender are inline-editable inputs; Category and Method are inline dropdowns (changing Method calls `buildStages` and reassigns `currentKey` if the old one no longer exists). A `<tfoot>` row totals `estInitial` and `estPO` for the filtered slice.
 
 **Views (tabs)**
-- Pipeline — sortable/filterable table; expandable detail rows with stage timeline + comments + stage editor.
+- Pipeline — sortable/filterable table; expandable detail rows with stage timeline + comments + stage editor. Filters: method, risk, category, current-stage-name. Default sort is `estInitial` desc.
 - Gantt — see above.
 - Upcoming — agenda-style next-step view per procurement, grouped by week, with horizon filter (30/60/90d/All).
 - Analytics — Recharts bar and pie charts; uses `estInitial` (not `estPO`, which is mostly 0).
 
 **Root component** (`App`, default export)
 - `useState` for `procurements`, `distributionDays`, `syncStatus`, filters, sort, modal flags, etc.
-- One `useEffect` loads from `/api/state` on mount. If the DB is empty it seeds with `initializeProcurements()`. Stage arrays are re-passed through `buildStages` so newly-added default keys (like `delivery`) merge into existing records.
+- One `useEffect` loads from `/api/state` on mount. If the DB is empty it seeds with `initializeProcurements()`. Before calling `buildStages`, the loader runs a one-shot **`published` → `submission` migration**: if a record has the old long `published` (plannedDays > 1) and no `submission` stage, the duration is carried into a new `submission` stage inserted after `published`, `published.plannedDays` is reset to 1, and any `currentKey === "clarifications"` is remapped to `submission`. The deprecated `clarifications` key is filtered out. The migration is idempotent.
 - One `useEffect` writes to `/api/state` with 600 ms debounce on any change to `procurements` or `distributionDays`. `hydratedRef` prevents the first render from triggering a save.
 - `SyncBadge` in the header surfaces sync state (`loading | saving | synced | error | offline`).
 
@@ -84,7 +86,7 @@ Dynamic-imports `jspdf` + `jspdf-autotable` (v5 — v3 used a different API and 
 ## Key domain concepts
 
 - **Method**: `ITB` (Invitation to Bid, goods) vs `RFP` (Request for Proposals, services). Different stage sequences.
-- **State**: `active | on_hold | cancelled | pre_pipeline | not_applicable` — controls risk pill rendering and initial stage status.
+- **State**: `active | on_hold | cancelled | pre_pipeline | not_applicable | awarded` — controls risk pill rendering and initial stage status. The first stage `awaiting_pr` is the natural `currentKey` for `pre_pipeline` records (no PR yet).
 - **Stage status**: `complete | in_progress | not_started | blocked | skipped`.
 - **Risk levels**: `ok` (≥ 7d buffer or no target), `watch` (1–6d), `critical` (overrun), `neutral` (cancelled / pre-pipeline / not-applicable).
 - **Buffer vs Delay**: two distinct things. *Buffer* in `computeProcurement` is the calendar gap between estimated PO date and `targetPO` (drives risk colour). *Buffer/delay* on the Gantt is a user-toggleable orange hatched zone drawn after the procurement's last stage, configured per procurement via `bufferEnabled` + `bufferDays`.
@@ -93,7 +95,7 @@ Dynamic-imports `jspdf` + `jspdf-autotable` (v5 — v3 used a different API and 
 
 `SEED` only matters on first load; after that, edit through the UI and the changes persist to Neon automatically. If you need to bulk-edit, write a one-off script that connects with `@neondatabase/serverless` and updates the JSONB blob (see the sanctions/stage-timing migration we ran mid-session for the pattern).
 
-Each record needs: `id`, `pr`, `lot`, `intend`, `tender`, `category`, `method`, `estInitial`, `estPO`, `nBids`, `opening`, `closing`, `currentKey` (must match a key in the stage base), `narrative`, `targetPO` (ISO date string or `""`), `state`, `comments`. Optional persisted fields used by the UI: `bufferEnabled`, `bufferDays`, `nResponsive`, custom `stages` array (overrides defaults from `buildStages`).
+Each record needs: `id`, `pr`, `lot`, `intend` (tender reference code, e.g. `2026/FLHAI/...`), `tender` (free-text description), `category`, `method`, `estInitial`, `estPO`, `nBids`, `opening`, `closing`, `currentKey` (must match a key in the stage base), `narrative`, `targetPO` (ISO date string or `""`), `state`, `comments`. Optional persisted fields used by the UI: `bufferEnabled`, `bufferDays`, `nResponsive`, `filesLink` (URL shown in the detail panel under "Link to files"), custom `stages` array (overrides defaults from `buildStages`).
 
 To add a new procurement category, add an entry to `CATEGORY_COLORS`. If the category name starts with `Inputs`, the 21-day delivery stage is auto-appended.
 
