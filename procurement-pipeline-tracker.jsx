@@ -1712,7 +1712,7 @@ function PipelineTable({ enriched, expandedId, setExpandedId, sortBy, sortDir, s
           <tfoot>
             <tr style={{ backgroundColor: "#F1F5F9", borderTop: `2px solid ${FAO_NAVY}` }}>
               <td className="px-3 py-3"></td>
-              <td className="px-3 py-3 text-[10px] uppercase tracking-wider font-bold" colSpan={4} style={{ color: FAO_NAVY, fontFamily: fontStack.body }}>
+              <td className="px-3 py-3 text-[10px] uppercase tracking-wider font-bold" colSpan={5} style={{ color: FAO_NAVY, fontFamily: fontStack.body }}>
                 Total ({enriched.length} {enriched.length === 1 ? "procurement" : "procurements"})
               </td>
               <td className="px-3 py-3 text-right text-sm font-bold tabular-nums" style={{ color: FAO_NAVY, fontFamily: fontStack.mono }}>
